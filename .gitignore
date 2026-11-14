@@ -1,0 +1,48 @@
+# Local machine data: game path, logs, dumps, tools, test profiles.
+# Never commit anything from these folders.
+/local/
+/tools/
+/dump/
+/refs/
+/artifacts/
+/logs/
+
+# Build output
+**/bin/
+**/obj/
+*.user
+*.suo
+*.userprefs
+
+# IDEs
+.vs/
+.idea/
+.vscode/
+
+# Game / BepInEx generated files (never commit these)
+**/BepInEx/
+**/BepInExPack/
+**/dotnet/
+**/interop/
+**/UnityPlayer.dll
+**/GameAssembly.dll
+**/Peripeteia_Data/
+**/winhttp.dll
+**/doorstop_config.ini
+
+# Compiled binaries and archives
+*.dll
+*.pdb
+*.zip
+*.7z
+*.rar
+
+# Logs and crash dumps
+*.log
+*.dmp
+*.mdmp
+
+# OS noise
+Thumbs.db
+Desktop.ini
+.DS_Store

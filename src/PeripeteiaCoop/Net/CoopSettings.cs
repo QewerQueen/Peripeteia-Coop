@@ -1,0 +1,80 @@
+using System;
+
+namespace PeripeteiaCoop;
+
+internal enum CoopRole
+{
+    Offline,
+    Host,
+    Client,
+}
+
+/// <summary>
+/// Parsed command-line settings. Defaults keep the mod inactive during normal
+/// single-player launches.
+/// </summary>
+internal sealed class CoopSettings
+{
+    public CoopRole Role { get; private set; } = CoopRole.Offline;
+
+    public string Address { get; private set; } = "127.0.0.1";
+
+    public int Port { get; private set; } = 7777;
+
+    public string PlayerName { get; private set; } = "Player";
+
+    public bool AutoPilot { get; private set; }
+
+    public static CoopSettings Parse(string[] args)
+    {
+        var settings = new CoopSettings();
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            string arg = args[i].ToLowerInvariant();
+
+            switch (arg)
+            {
+                case "-coop-host":
+                case "--coop-host":
+                    settings.Role = CoopRole.Host;
+                    break;
+
+                case "-coop-connect":
+                case "--coop-connect":
+                    settings.Role = CoopRole.Client;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                    {
+                        settings.Address = args[++i];
+                    }
+                    break;
+
+                case "-coop-port":
+                case "--coop-port":
+                    if (i + 1 < args.Length &&
+                        int.TryParse(args[++i], out int port) &&
+                        port > 0 &&
+                        port <= 65535)
+                    {
+                        settings.Port = port;
+                    }
+                    break;
+
+                case "-coop-name":
+                case "--coop-name":
+                    if (i + 1 < args.Length)
+                    {
+                        settings.PlayerName = args[++i];
+                    }
+                    break;
+
+                case "-coop-autopilot":
+                case "--coop-autopilot":
+                    settings.AutoPilot = true;
+                    break;
+            }
+        }
+
+        return settings;
+    }
+}

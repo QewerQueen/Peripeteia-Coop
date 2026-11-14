@@ -1,0 +1,14 @@
+<Project>
+  <!--
+    Local, machine-specific settings.
+    `local/gamepath.props` is git-ignored and should contain:
+      <Project><PropertyGroup><PeripeteiaDir>C:\path\to\Peripeteia</PeripeteiaDir></PropertyGroup></Project>
+    Alternatively set the PERIPETEIA_DIR environment variable.
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)local\gamepath.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)local\gamepath.props')" />
+
+  <PropertyGroup>
+    <PeripeteiaDir Condition="'$(PeripeteiaDir)' == ''">$(PERIPETEIA_DIR)</PeripeteiaDir>
+  </PropertyGroup>
+</Project>
