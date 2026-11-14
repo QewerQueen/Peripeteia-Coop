@@ -74,9 +74,131 @@ To make the client move by itself while you watch the host window:
 .\scripts\run-two.ps1 -AutoPilot
 ```
 
-Then start the same save (or a new game) in both windows. The other player is a
-cloned Marie model that slides between received poses; it does not animate yet.
-See [docs/SOLO_TESTING.md](docs/SOLO_TESTING.md) for details.
+Then start the same save in both windows. The other player is a cloned Marie
+model that slides between received poses; it does not animate yet. See
+[docs/SOLO_TESTING.md](docs/SOLO_TESTING.md) for details, or the Russian
+step-by-step guide below.
+
+## Пошаговый гайд: проверить кооп в игре
+
+Это проверка на одном ПК: одно окно — хост, второе — клиент. Полноценное
+совместное прохождение пока невозможно, но подключение и синхронизацию
+движения так проверить можно.
+
+### 1. Создай общее сохранение
+
+Если в `EASaves` ещё нет сохранений, обоим игрокам нечего загружать. Создай
+сохранение один раз:
+
+```powershell
+cd C:\Path\To\PeripeteiaCoop
+.\scripts\run-two.ps1 -NoClient
+```
+
+Путь замени на свой. Запустится одно окно игры. Начни новую игру, дойди до первого уровня и
+сохранись через меню. Если ручного сохранения нет — дождись автосейва при
+входе на уровень. Закрой игру.
+
+### 2. Запусти два окна
+
+```powershell
+.\scripts\run-two.ps1
+```
+
+Появятся два окна:
+
+- **host** — 1280×720;
+- **client** — 960×540.
+
+Сначала в окне **host** выбери `Load` → своё сохранение и дождись загрузки
+уровня. Потом в окне **client** выбери `Load` → **то же самое сохранение** и
+тоже дождись загрузки.
+
+Клиент не сможет сохраняться — это специально, чтобы не затереть прогресс
+хоста.
+
+### 3. Что должно получиться
+
+- Второй игрок появится как **клон Марии**.
+- Клон двигается и поворачивается, когда двигается второй игрок.
+- Модель пока **статичная**: ходьба, прыжок и приседание не проигрываются,
+  клон просто скользит между позициями.
+- Мир у каждого свой: двери, AI, предметы, инвентарь и квесты не
+  синхронизируются.
+
+Проверка: подвигайся в окне host — клон в окне client должен повторять
+позицию. Потом наоборот. Можно запустить `.\scripts\run-two.ps1 -AutoPilot`,
+тогда хост будет двигаться сам.
+
+### 4. Смотри логи
+
+В отдельном PowerShell:
+
+```powershell
+cd C:\Path\To\PeripeteiaCoop
+Select-String -Path .\local\logs\host.log, .\local\logs\client.log `
+  -Pattern "\[net\]|\[avatar\]|Exception|Rejecting|ConnectionFailed"
+```
+
+Нормальные строки:
+
+```text
+[net] Peer connected: id=1 ...
+[net] Player 1 is 'Client'.
+[avatar] cloned player model: renderers=6, enabled=6, children=3
+[net] role=Host peers=1 avatars=1 ...
+```
+
+Плохие строки:
+
+```text
+ConnectionFailed
+Rejecting ...
+Exception
+NullReferenceException
+```
+
+Если `local/logs` пустой, смотри `BepInEx\LogOutput.log` и
+`BepInEx\LogOutput.1.log` в папке игры.
+
+### 5. Если что-то не работает
+
+- **`ConnectionFailed`** — подожди до 60 секунд: клиент повторяет попытки
+  подключения. Хост должен быть запущен первым. Разреши `Peripeteia.exe` в
+  брандмауэре Windows для частных сетей.
+- **`Rejecting ...`** — у окон разные версии игры или мода. Пересобери и
+  разложи плагин заново.
+- **Нет клона, но `avatars=1`** — клон может стоять в другой точке уровня.
+  Подвигайся и посмотри вокруг.
+- **Клиент не может загрузить уровень или начать новую игру** — временно
+  поставь `BlockSaves = false` в `BepInEx\config\peripeteia.coop.cfg`. Но тогда
+  клиент сможет затереть сохранение хоста.
+- **Двери/AI/предметы ведут себя по-разному** — это ожидаемо, мир пока не
+  синхронизирован.
+
+После закрытия окон сейвы автоматически копируются в
+`local/saves_backup/<дата-время>/EASaves`.
+
+## Игра с другом по сети
+
+На хосте:
+
+```text
+Peripeteia.exe -coop-host -coop-port 7777 -coop-name Host
+```
+
+У друга:
+
+```text
+Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
+```
+
+Для интернета нужен проброс **UDP 7777** на роутере или VPN-меш
+(ZeroTier/Tailscale). Steam P2P в игре нет.
+
+Важно: сохранение не передаётся автоматически. Оба игрока должны загрузить
+один и тот же уровень/сохранение; файл `EASaves` нужно скопировать вручную.
+Клиент по-прежнему не сможет сохраняться.
 
 ## Current limitations
 
