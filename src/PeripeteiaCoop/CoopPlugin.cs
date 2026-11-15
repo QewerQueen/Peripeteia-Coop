@@ -3,6 +3,7 @@ using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
+using Il2CppInterop.Runtime.Injection;
 using UnityEngine;
 
 namespace PeripeteiaCoop;
@@ -29,9 +30,9 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool ShowStatusOverlay { get; private set; } = true;
 
-    internal static float WeaponGripDown { get; private set; } = 0.04f;
+    internal static float WeaponGripDown { get; private set; }
 
-    internal static float WeaponGripForward { get; private set; } = 0.015f;
+    internal static float WeaponGripForward { get; private set; }
 
     internal static CoopSettings Settings { get; private set; } = null!;
 
@@ -78,15 +79,15 @@ public sealed class CoopPlugin : BasePlugin
         WeaponGripDown = Config.Bind(
             "Weapon",
             "GripDown",
-            0.04f,
-            "Lower the remote weapon from the wrist bone, in meters. Increase this if the gun floats above the hand."
+            0.0f,
+            "Optional fine-tune: lower the remote weapon in the hand's local space, in meters. Leave at 0 to copy the sender exactly."
         ).Value;
 
         WeaponGripForward = Config.Bind(
             "Weapon",
             "GripForward",
-            0.015f,
-            "Move the remote weapon toward the fingers, in meters. Small adjustments only."
+            0.0f,
+            "Optional fine-tune: move the remote weapon toward the fingers in the hand's local space, in meters. Leave at 0 to copy the sender exactly."
         ).Value;
 
         Settings = CoopSettings.Parse(Environment.GetCommandLineArgs());
@@ -108,6 +109,20 @@ public sealed class CoopPlugin : BasePlugin
 
         if (Settings.Role != CoopRole.Offline)
         {
+            // The remote grip solver is a managed MonoBehaviour added at runtime.
+            // IL2CPP must know the type before AddComponent can create it.
+            try
+            {
+                ClassInjector.RegisterTypeInIl2Cpp<RemoteWeaponIK>();
+                LogSource.LogInfo("Remote weapon IK component registered.");
+            }
+            catch (Exception exception)
+            {
+                LogSource.LogError(
+                    $"Failed to register RemoteWeaponIK: {exception.GetType().Name}: {exception.Message}"
+                );
+            }
+
             Network = new CoopNetwork(Settings);
             Network.Start();
         }

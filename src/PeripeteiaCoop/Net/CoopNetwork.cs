@@ -44,7 +44,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 8;
+    private const int ProtocolVersion = 9;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
 
@@ -545,6 +545,12 @@ internal sealed class CoopNetwork : IDisposable
         writer.Put(snapshot.RootRotation.y);
         writer.Put(snapshot.RootRotation.z);
         writer.Put(snapshot.RootRotation.w);
+        writer.Put(snapshot.RightGrabPath ?? string.Empty);
+        writer.Put(snapshot.LeftGrabPath ?? string.Empty);
+        writer.Put(snapshot.OneHanded);
+        writer.Put(snapshot.HandRotationMod.x);
+        writer.Put(snapshot.HandRotationMod.y);
+        writer.Put(snapshot.HandRotationMod.z);
         writer.Put(snapshot.AnimatorHash);
         writer.Put(snapshot.AnimatorTime);
         writer.Put(snapshot.AnimatorActive);
@@ -573,6 +579,14 @@ internal sealed class CoopNetwork : IDisposable
             reader.GetFloat(),
             reader.GetFloat()
         );
+        string rightGrabPath = reader.GetString();
+        string leftGrabPath = reader.GetString();
+        bool oneHanded = reader.GetBool();
+        var handRotationMod = new Vector3(
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat()
+        );
         int animatorHash = reader.GetInt();
         float animatorTime = reader.GetFloat();
         bool animatorActive = reader.GetBool();
@@ -589,6 +603,10 @@ internal sealed class CoopNetwork : IDisposable
             rotation,
             scale,
             rootRotation,
+            rightGrabPath,
+            leftGrabPath,
+            oneHanded,
+            handRotationMod,
             animatorHash,
             animatorTime,
             animatorActive,

@@ -54,9 +54,13 @@ internal sealed class RemoteAvatar
     private Vector3 _weaponLocalPosition;
     private Quaternion _weaponLocalRotation = Quaternion.identity;
     private Vector3 _weaponLocalScale = Vector3.one;
-    private Quaternion _weaponRootRotation = Quaternion.identity;
-    private bool _weaponUseHandAnchor = true;
-    private Transform? _weaponHand;
+    private Transform? _weaponRightGrab;
+    private Transform? _weaponLeftGrab;
+    private string _weaponRightGrabPath = string.Empty;
+    private string _weaponLeftGrabPath = string.Empty;
+    private bool _weaponOneHanded;
+    private Vector3 _weaponHandRotationMod;
+    private RemoteWeaponIK? _weaponIk;
     private bool _weaponVisible;
     private float _weaponHoldWeight;
     private float _nextWeaponBuildTime;
@@ -286,6 +290,9 @@ internal sealed class RemoteAvatar
             _weaponMuzzle = null;
             _weaponFlash = null;
             _weaponAnimator = null;
+            _weaponRightGrab = null;
+            _weaponLeftGrab = null;
+            _weaponIk = null;
             _nextWeaponBuildTime = 0.0f;
             if (_weaponVisible)
             {
@@ -357,6 +364,8 @@ internal sealed class RemoteAvatar
                 $"[avatar] id={Id} dragging={(dragging ? "on" : "off")}"
             );
         }
+
+        UpdateWeaponIk();
     }
 
     /// <summary>
@@ -390,7 +399,10 @@ internal sealed class RemoteAvatar
         _weaponLocalPosition = snapshot.LocalPosition;
         _weaponLocalRotation = snapshot.LocalRotation;
         _weaponLocalScale = snapshot.LocalScale;
-        _weaponRootRotation = snapshot.RootRotation;
+        _weaponRightGrabPath = snapshot.RightGrabPath;
+        _weaponLeftGrabPath = snapshot.LeftGrabPath;
+        _weaponOneHanded = snapshot.OneHanded;
+        _weaponHandRotationMod = snapshot.HandRotationMod;
         _weaponAnimatorHash = snapshot.AnimatorHash;
         _weaponAnimatorTime = snapshot.AnimatorTime;
         _weaponAnimatorActive = snapshot.AnimatorActive;
@@ -406,6 +418,8 @@ internal sealed class RemoteAvatar
             TryBuildWeaponVisual();
         }
 
+        _weaponIk?.SetHandRotationMod(_weaponHandRotationMod);
+        UpdateWeaponIk();
         ApplyWeaponTransform();
     }
 
@@ -414,6 +428,7 @@ internal sealed class RemoteAvatar
         _actionHash = stateHash;
         _actionTime = normalizedTime;
         _actionActive = active && stateHash != 0;
+        UpdateWeaponIk();
     }
 
     public void ApplyWeaponEvent(WeaponEvent weaponEvent)
@@ -520,7 +535,25 @@ internal sealed class RemoteAvatar
             ApplyWeaponHoldHand(_weaponHoldWeight);
         }
 
+        UpdateWeaponIk();
         ApplyWeaponPose();
+    }
+
+    private void UpdateWeaponIk()
+    {
+        if (_weaponIk == null)
+        {
+            return;
+        }
+
+        bool active = _weaponVisible &&
+                      _weaponVisual != null &&
+                      !_weaponOneHanded &&
+                      _weaponLeftGrab != null &&
+                      !_actionActive &&
+                      !_dragging &&
+                      _weaponHoldWeight > 0.35f;
+        _weaponIk.SetLeftGrab(_weaponLeftGrab, active);
     }
 
     private void ApplyRemoteAction()
@@ -669,19 +702,19 @@ internal sealed class RemoteAvatar
 
         visual.transform.SetParent(parent, false);
         _weaponVisual = visual;
-        _weaponHand = useHandAnchor ? hand : null;
-        _weaponUseHandAnchor = useHandAnchor;
-        _weaponVisual.transform.localPosition = useHandAnchor
-            ? Vector3.zero
-            : _weaponLocalPosition;
-        _weaponVisual.transform.localRotation = useHandAnchor
-            ? Quaternion.identity
-            : _weaponLocalRotation;
+        // The sender sends the weapon's real local transform relative to the
+        // same skeleton bone. Applying it verbatim copies the game's own
+        // attachment, including the grip position inside the palm. The config
+        // offset is only a final nudge and defaults to zero.
+        _weaponVisual.transform.localPosition =
+            _weaponLocalPosition + GetWeaponGripNudge();
+        _weaponVisual.transform.localRotation = _weaponLocalRotation;
         _weaponVisual.transform.localScale = _weaponLocalScale;
-        if (useHandAnchor && hand != null)
-        {
-            _weaponVisual.transform.position = GetWeaponGripPosition(hand);
-        }
+
+        _weaponRightGrab = FindGrabPoint(visual.transform, _weaponRightGrabPath, true);
+        _weaponLeftGrab = FindGrabPoint(visual.transform, _weaponLeftGrabPath, false);
+
+        EnsureWeaponIk();
 
         _weaponMuzzle = FindWeaponMuzzle(visual.transform, _weaponMuzzlePath);
         _weaponFlash = null;
@@ -709,9 +742,16 @@ internal sealed class RemoteAvatar
         _appliedWeaponAnimatorHash = 0;
         _appliedWeaponAnimatorTime = 0.0f;
 
+        UpdateWeaponIk();
+
         CoopPlugin.LogSource.LogInfo(
             $"[avatar] id={Id} weapon visual '{_weaponItemName}' slot='{parent.name}' " +
+            $"parentPath='{_weaponParentPath}' " +
             $"anchor={(useHandAnchor ? "hand" : "path")} " +
+            $"rightGrab={(_weaponRightGrab != null ? _weaponRightGrab.name : "<none>")} " +
+            $"leftGrab={(_weaponLeftGrab != null ? _weaponLeftGrab.name : "<none>")} " +
+            $"oneHanded={_weaponOneHanded} " +
+            $"localPos={_weaponLocalPosition} localRot={_weaponLocalRotation.eulerAngles} " +
             $"gripDown={CoopPlugin.WeaponGripDown:F3} " +
             $"gripForward={CoopPlugin.WeaponGripForward:F3} " +
             $"weaponWorld={_weaponVisual.transform.position} " +
@@ -721,22 +761,51 @@ internal sealed class RemoteAvatar
         );
     }
 
-    private Vector3 GetWeaponGripPosition(Transform hand)
+    private void EnsureWeaponIk()
     {
-        // Root-local axes keep the offset stable while the character turns or
-        // leans. Positive GripDown moves the gun downward; positive
-        // GripForward moves it toward the fingers.
-        Vector3 offset = new(
+        if (_gameAnimator == null)
+        {
+            return;
+        }
+
+        if (_weaponIk != null && _weaponIk.gameObject != null)
+        {
+            _weaponIk.Configure(_gameAnimator, _weaponHandRotationMod);
+            return;
+        }
+
+        try
+        {
+            _weaponIk = _gameAnimator.gameObject.GetComponent<RemoteWeaponIK>();
+            if (_weaponIk == null)
+            {
+                _weaponIk = _gameAnimator.gameObject.AddComponent<RemoteWeaponIK>();
+            }
+
+            _weaponIk.Configure(_gameAnimator, _weaponHandRotationMod);
+            CoopPlugin.LogSource.LogInfo(
+                $"[avatar] id={Id} weapon hand IK attached to '{_gameAnimator.name}'."
+            );
+        }
+        catch (Exception exception)
+        {
+            _weaponIk = null;
+            CoopPlugin.LogSource.LogWarning(
+                $"[avatar] id={Id} could not attach weapon hand IK: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    private static Vector3 GetWeaponGripNudge()
+    {
+        // The exact attachment comes from the sender. These two values are only
+        // a final manual nudge in the hand's local space and default to zero.
+        return new Vector3(
             0.0f,
             -CoopPlugin.WeaponGripDown,
             CoopPlugin.WeaponGripForward
         );
-        if (Root != null)
-        {
-            offset = Root.transform.rotation * offset;
-        }
-
-        return hand.position + offset;
     }
 
     private void ApplyWeaponTransform()
@@ -747,24 +816,7 @@ internal sealed class RemoteAvatar
         }
 
         Transform weapon = _weaponVisual.transform;
-
-        if (_weaponUseHandAnchor && _weaponHand != null && Root != null)
-        {
-            // The hand bone may be animated by the game Animator after this
-            // method runs in Update; ApplyLatePose calls this again after the
-            // Animator, so the gun follows the hand and keeps the sender's aim
-            // direction without depending on the first-person WeaponLocation.
-            //
-            // Hand.R is the wrist, while the grip sits in the palm. GripDown and
-            // GripForward shift the gun from the wrist into the palm so the hand
-            // visually wraps around the grip instead of sitting below the gun.
-            weapon.position = GetWeaponGripPosition(_weaponHand);
-            weapon.rotation = Root.transform.rotation * _weaponRootRotation;
-            weapon.localScale = _weaponLocalScale;
-            return;
-        }
-
-        weapon.localPosition = _weaponLocalPosition;
+        weapon.localPosition = _weaponLocalPosition + GetWeaponGripNudge();
         weapon.localRotation = _weaponLocalRotation;
         weapon.localScale = _weaponLocalScale;
     }
@@ -780,7 +832,9 @@ internal sealed class RemoteAvatar
         _weaponMuzzle = null;
         _weaponFlash = null;
         _weaponAnimator = null;
-        _weaponHand = null;
+        _weaponRightGrab = null;
+        _weaponLeftGrab = null;
+        _weaponIk?.Clear();
     }
 
     private static void ClearSlotChildren(Transform parent)
@@ -865,6 +919,72 @@ internal sealed class RemoteAvatar
         }
 
         return null;
+    }
+
+    private static Transform? FindGrabPoint(Transform weapon, string path, bool right)
+    {
+        if (!string.IsNullOrEmpty(path))
+        {
+            Transform? fromPath = FindTransformByPath(weapon, path);
+            if (fromPath == null)
+            {
+                fromPath = weapon.Find(path);
+            }
+
+            if (fromPath != null)
+            {
+                return fromPath;
+            }
+        }
+
+        // Fallback for weapons whose Shoot component was not available while
+        // capturing the snapshot. The prefab names are stable in the game.
+        string exact = right ? "rightgrab" : "leftgrab";
+        string shortName = right ? "rgrab" : "lgrab";
+        string side = right ? "r" : "l";
+        Transform? best = null;
+        int bestScore = 0;
+
+        foreach (Transform child in weapon.GetComponentsInChildren<Transform>(true))
+        {
+            if (child == null)
+            {
+                continue;
+            }
+
+            string name = child.name.ToLowerInvariant();
+            int score = 0;
+            if (string.Equals(name, exact, StringComparison.Ordinal))
+            {
+                score = 100;
+            }
+            else if (string.Equals(name, shortName, StringComparison.Ordinal))
+            {
+                score = 90;
+            }
+            else if (name.Contains("grab"))
+            {
+                if (name.Contains(right ? "right" : "left"))
+                {
+                    score = 80;
+                }
+                else if (name.Contains($"grab_{side}") ||
+                         name.Contains($"grab.{side}") ||
+                         name.Contains($"grab-{side}") ||
+                         name.Contains($"grab {side}"))
+                {
+                    score = 70;
+                }
+            }
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = child;
+            }
+        }
+
+        return best;
     }
 
     /// <summary>

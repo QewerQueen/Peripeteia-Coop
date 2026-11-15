@@ -315,6 +315,31 @@ internal static class WeaponSync
             muzzlePath = BuildRelativePath(shoot.AttachedGun.muzzle, weapon);
         }
 
+        string rightGrabPath = string.Empty;
+        string leftGrabPath = string.Empty;
+        bool oneHanded = false;
+        Vector3 handRotationMod = Vector3.zero;
+        if (shoot != null && shoot.AttachedGun != null)
+        {
+            if (shoot.AttachedGun.RightGrab != null)
+            {
+                rightGrabPath = BuildRelativePath(shoot.AttachedGun.RightGrab, weapon);
+            }
+
+            if (shoot.AttachedGun.LeftGrab != null)
+            {
+                leftGrabPath = BuildRelativePath(shoot.AttachedGun.LeftGrab, weapon);
+            }
+
+            oneHanded = shoot.AttachedGun.oneHanded;
+        }
+
+        if (shoot != null && shoot.attachedIK != null)
+        {
+            oneHanded = shoot.attachedIK.oneHanded || oneHanded;
+            handRotationMod = shoot.attachedIK.handRotationMod;
+        }
+
         Animator? weaponAnimator = FindWeaponAnimator(weapon);
         int animatorHash = 0;
         float animatorTime = 0.0f;
@@ -346,6 +371,10 @@ internal static class WeaponSync
             weapon.localRotation,
             weapon.localScale,
             Quaternion.Inverse(localPlayer.transform.rotation) * weapon.rotation,
+            rightGrabPath,
+            leftGrabPath,
+            oneHanded,
+            handRotationMod,
             animatorHash,
             animatorTime,
             animatorActive,
@@ -671,6 +700,10 @@ internal readonly struct WeaponSnapshot
         Quaternion localRotation,
         Vector3 localScale,
         Quaternion rootRotation,
+        string rightGrabPath,
+        string leftGrabPath,
+        bool oneHanded,
+        Vector3 handRotationMod,
         int animatorHash,
         float animatorTime,
         bool animatorActive,
@@ -688,6 +721,10 @@ internal readonly struct WeaponSnapshot
         LocalRotation = localRotation;
         LocalScale = localScale;
         RootRotation = rootRotation;
+        RightGrabPath = rightGrabPath;
+        LeftGrabPath = leftGrabPath;
+        OneHanded = oneHanded;
+        HandRotationMod = handRotationMod;
         AnimatorHash = animatorHash;
         AnimatorTime = animatorTime;
         AnimatorActive = animatorActive;
@@ -721,6 +758,14 @@ internal readonly struct WeaponSnapshot
     /// </summary>
     public Quaternion RootRotation { get; }
 
+    public string RightGrabPath { get; }
+
+    public string LeftGrabPath { get; }
+
+    public bool OneHanded { get; }
+
+    public Vector3 HandRotationMod { get; }
+
     public int AnimatorHash { get; }
 
     public float AnimatorTime { get; }
@@ -730,7 +775,8 @@ internal readonly struct WeaponSnapshot
     public Transform? WeaponTransform { get; }
 
     public string Descriptor =>
-        $"{ItemName}|{TemplateName}|{VisualHash}|{ParentPath}|{MuzzlePath}";
+        $"{ItemName}|{TemplateName}|{VisualHash}|{ParentPath}|{MuzzlePath}|" +
+        $"{RightGrabPath}|{LeftGrabPath}|{OneHanded}|{HandRotationMod}";
 }
 
 [HarmonyPatch(typeof(Shoot), "Fire", new Type[] { typeof(LayerMask), typeof(int) })]
