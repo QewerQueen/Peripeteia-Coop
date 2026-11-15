@@ -570,7 +570,48 @@ internal sealed class RemoteAvatar
 
         UpdateWeaponIk();
         ApplyWeaponPose();
+        ApplyWeaponSupportHand(_weaponHoldWeight);
         LogWeaponProbe();
+    }
+
+    private void ApplyWeaponSupportHand(float weight)
+    {
+        if (!_weaponVisible ||
+            _weaponOneHanded ||
+            _weaponLeftGrab == null ||
+            _actionActive ||
+            _dragging ||
+            weight <= 0.01f ||
+            Root == null ||
+            !_bones.TryGetValue(BoneRole.LeftUpperArm, out BoneState upper) ||
+            !_bones.TryGetValue(BoneRole.LeftLowerArm, out BoneState lower) ||
+            !_bones.TryGetValue(BoneRole.LeftHand, out BoneState hand) ||
+            upper.Bone == null ||
+            lower.Bone == null ||
+            hand.Bone == null)
+        {
+            return;
+        }
+
+        Vector3 shoulder = upper.Bone.position;
+        Vector3 target = _weaponLeftGrab.position;
+        Vector3 leftPole = shoulder -
+                           Root.transform.right * 0.25f +
+                           Root.transform.forward * 0.05f -
+                           Vector3.up * 0.20f;
+        SolveTwoBone(
+            upper.Bone,
+            lower.Bone,
+            hand.Bone,
+            target,
+            leftPole,
+            weight
+        );
+        hand.Bone.rotation = Quaternion.Slerp(
+            hand.Bone.rotation,
+            _weaponLeftGrab.rotation * Quaternion.Euler(_weaponHandRotationMod),
+            Mathf.Clamp01(weight)
+        );
     }
 
     private void LogWeaponProbe()
@@ -591,6 +632,14 @@ internal sealed class RemoteAvatar
         Vector3 leftHand = _bones.TryGetValue(BoneRole.LeftHand, out BoneState left) &&
                            left.Bone != null
             ? left.Bone.position
+            : Vector3.zero;
+        Vector3 leftUpper = _bones.TryGetValue(BoneRole.LeftUpperArm, out BoneState upperArm) &&
+                            upperArm.Bone != null
+            ? upperArm.Bone.position
+            : Vector3.zero;
+        Vector3 leftLower = _bones.TryGetValue(BoneRole.LeftLowerArm, out BoneState lowerArm) &&
+                            lowerArm.Bone != null
+            ? lowerArm.Bone.position
             : Vector3.zero;
         Transform? animatorLeft = _gameAnimator != null &&
                                   _gameAnimator.isHuman
@@ -615,6 +664,7 @@ internal sealed class RemoteAvatar
             $"target={_lastWeaponHoldTarget} " +
             $"rightHand={rightHand} rightDistance={Vector3.Distance(rightHand, _lastWeaponHoldTarget):F3} " +
             $"leftHand={leftHand} " +
+            $"leftUpper={leftUpper} leftLower={leftLower} " +
             $"ikLeftHand={(animatorLeft != null ? animatorLeft.position : Vector3.zero)} " +
             $"leftGrab={leftGrab} leftDistance={Vector3.Distance(leftHand, leftGrab):F3} " +
             $"ikLeftDistance={(animatorLeft != null ? Vector3.Distance(animatorLeft.position, leftGrab) : -1.0f):F3} " +
@@ -1410,9 +1460,20 @@ internal sealed class RemoteAvatar
         // axis points backwards. Otherwise the hands end up inside the chest.
         aimDirection.Normalize();
         float aimPitch = Mathf.Asin(Mathf.Clamp(aimDirection.y, -1.0f, 1.0f));
+        Vector3 flatAim = new Vector3(aimDirection.x, 0.0f, aimDirection.z);
+        if (flatAim.sqrMagnitude < 0.0001f)
+        {
+            flatAim = Root.transform.forward;
+        }
+        flatAim.Normalize();
+
+        // Do not move the hands all the way above the head when aiming straight
+        // up. The original keeps both hands in front of the chest while the
+        // weapon itself rotates. Limiting the vertical part also keeps the
+        // support arm reachable.
+        float verticalAim = Mathf.Clamp(Mathf.Sin(aimPitch), -1.0f, 1.0f);
         Vector3 holdDirection = (
-            Root.transform.forward * Mathf.Cos(aimPitch) +
-            Vector3.up * Mathf.Sin(aimPitch)
+            flatAim + Vector3.up * (verticalAim * 0.55f)
         ).normalized;
 
         Vector3 target = chest +
