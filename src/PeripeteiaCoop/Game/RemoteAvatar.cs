@@ -1460,20 +1460,19 @@ internal sealed class RemoteAvatar
         // axis points backwards. Otherwise the hands end up inside the chest.
         aimDirection.Normalize();
         float aimPitch = Mathf.Asin(Mathf.Clamp(aimDirection.y, -1.0f, 1.0f));
-        Vector3 flatAim = new Vector3(aimDirection.x, 0.0f, aimDirection.z);
-        if (flatAim.sqrMagnitude < 0.0001f)
-        {
-            flatAim = Root.transform.forward;
-        }
-        flatAim.Normalize();
 
         // Do not move the hands all the way above the head when aiming straight
         // up. The original keeps both hands in front of the chest while the
         // weapon itself rotates. Limiting the vertical part also keeps the
         // support arm reachable.
+        //
+        // The horizontal part must come from the body, not from the barrel.
+        // Near vertical aim the barrel's horizontal component is tiny and can
+        // point backwards, which used to throw both hands behind the back.
         float verticalAim = Mathf.Clamp(Mathf.Sin(aimPitch), -1.0f, 1.0f);
         Vector3 holdDirection = (
-            flatAim + Vector3.up * (verticalAim * 0.55f)
+            Root.transform.forward +
+            Vector3.up * (verticalAim * 0.55f)
         ).normalized;
 
         Vector3 target = chest +
