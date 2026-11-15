@@ -68,6 +68,12 @@ internal sealed class RemoteAvatar
     private bool _weaponHasHandGrip;
     private bool _weaponPlacementLogged;
     private bool _weaponHoldLogged;
+    private Vector3 _lastWeaponHoldTarget;
+    private Vector3 _lastWeaponAimDirection;
+    private float _lastWeaponAimPitch;
+    private Vector3 _weaponBoundsCenterLocal;
+    private float _weaponProbeUntil;
+    private float _nextWeaponProbeTime;
     private string _weaponRightGrabPath = string.Empty;
     private string _weaponLeftGrabPath = string.Empty;
     private bool _weaponOneHanded;
@@ -564,6 +570,57 @@ internal sealed class RemoteAvatar
 
         UpdateWeaponIk();
         ApplyWeaponPose();
+        LogWeaponProbe();
+    }
+
+    private void LogWeaponProbe()
+    {
+        if (!_weaponVisible ||
+            _weaponVisual == null ||
+            Time.unscaledTime >= _weaponProbeUntil ||
+            Time.unscaledTime < _nextWeaponProbeTime)
+        {
+            return;
+        }
+
+        _nextWeaponProbeTime = Time.unscaledTime + 0.5f;
+        Vector3 rightHand = _bones.TryGetValue(BoneRole.RightHand, out BoneState right) &&
+                            right.Bone != null
+            ? right.Bone.position
+            : Vector3.zero;
+        Vector3 leftHand = _bones.TryGetValue(BoneRole.LeftHand, out BoneState left) &&
+                           left.Bone != null
+            ? left.Bone.position
+            : Vector3.zero;
+        Transform? animatorLeft = _gameAnimator != null &&
+                                  _gameAnimator.isHuman
+            ? _gameAnimator.GetBoneTransform(HumanBodyBones.LeftHand)
+            : null;
+        Transform? head = _gameAnimator != null && _gameAnimator.isHuman
+            ? _gameAnimator.GetBoneTransform(HumanBodyBones.Head)
+            : null;
+        Vector3 grip = _weaponRightGrab != null
+            ? _weaponRightGrab.position
+            : Vector3.zero;
+        Vector3 leftGrab = _weaponLeftGrab != null
+            ? _weaponLeftGrab.position
+            : Vector3.zero;
+        Vector3 weaponCenter = _weaponVisual.transform.TransformPoint(
+            _weaponBoundsCenterLocal
+        );
+        CoopPlugin.LogSource.LogInfo(
+            $"[avatar] id={Id} weapon probe hold={_weaponHoldWeight:F2} " +
+            $"ikWeight={(_weaponIk != null ? _weaponIk.CurrentWeight : 0.0f):F2} " +
+            $"pitch={_lastWeaponAimPitch:F2} aim={_lastWeaponAimDirection} " +
+            $"target={_lastWeaponHoldTarget} " +
+            $"rightHand={rightHand} rightDistance={Vector3.Distance(rightHand, _lastWeaponHoldTarget):F3} " +
+            $"leftHand={leftHand} " +
+            $"ikLeftHand={(animatorLeft != null ? animatorLeft.position : Vector3.zero)} " +
+            $"leftGrab={leftGrab} leftDistance={Vector3.Distance(leftHand, leftGrab):F3} " +
+            $"ikLeftDistance={(animatorLeft != null ? Vector3.Distance(animatorLeft.position, leftGrab) : -1.0f):F3} " +
+            $"grip={grip} weaponCenter={weaponCenter} " +
+            $"head={(head != null ? head.position : Vector3.zero)}."
+        );
     }
 
     private void UpdateWeaponIk()
@@ -839,6 +896,9 @@ internal sealed class RemoteAvatar
         Vector3 boundsSizeLocal = hasWeaponBounds
             ? visual.transform.InverseTransformVector(weaponBounds.size)
             : Vector3.zero;
+        _weaponBoundsCenterLocal = boundsCenterLocal;
+        _weaponProbeUntil = Time.unscaledTime + 30.0f;
+        _nextWeaponProbeTime = 0.0f;
 
         CoopPlugin.LogSource.LogInfo(
             $"[avatar] id={Id} weapon visual '{_weaponItemName}' slot='{parent.name}' " +
@@ -1356,42 +1416,32 @@ internal sealed class RemoteAvatar
         ).normalized;
 
         Vector3 target = chest +
-                         holdDirection * 0.50f +
-                         Root.transform.right * 0.07f;
+                         holdDirection * 0.42f;
+        _lastWeaponHoldTarget = target;
+        _lastWeaponAimDirection = aimDirection;
+        _lastWeaponAimPitch = aimPitch;
 
         float reach = (lower.Bone.position - upper.Bone.position).magnitude +
                       (hand.Bone.position - lower.Bone.position).magnitude;
         if (reach > 0.0001f)
         {
-            target = shoulder + Vector3.ClampMagnitude(target - shoulder, reach * 0.92f);
+            target = shoulder + Vector3.ClampMagnitude(target - shoulder, reach * 0.98f);
         }
 
-        Vector3 upperDirection = lower.Bone.position - shoulder;
-        Vector3 targetDirection = target - shoulder;
-        if (upperDirection.sqrMagnitude > 0.0001f && targetDirection.sqrMagnitude > 0.0001f)
-        {
-            Quaternion upperDelta = Quaternion.FromToRotation(
-                upperDirection.normalized,
-                targetDirection.normalized
-            );
-            upper.Bone.rotation = Quaternion.Slerp(Quaternion.identity, upperDelta, weight) *
-                                  upper.Bone.rotation;
-        }
+        Vector3 rightPole = shoulder +
+                            Root.transform.right * 0.30f +
+                            Root.transform.forward * 0.05f -
+                            Vector3.up * 0.20f;
+        SolveTwoBone(
+            upper.Bone,
+            lower.Bone,
+            hand.Bone,
+            target,
+            rightPole,
+            weight
+        );
 
-        Vector3 elbow = lower.Bone.position;
-        Vector3 forearmDirection = hand.Bone.position - elbow;
-        Vector3 elbowTarget = target - elbow;
-        if (forearmDirection.sqrMagnitude > 0.0001f && elbowTarget.sqrMagnitude > 0.0001f)
-        {
-            Quaternion lowerDelta = Quaternion.FromToRotation(
-                forearmDirection.normalized,
-                elbowTarget.normalized
-            );
-            lower.Bone.rotation = Quaternion.Slerp(Quaternion.identity, lowerDelta, weight) *
-                                  lower.Bone.rotation;
-        }
-
-        if (!_weaponHoldLogged)
+        if (!_weaponHoldLogged && weight > 0.9f)
         {
             _weaponHoldLogged = true;
             CoopPlugin.LogSource.LogInfo(
@@ -1400,6 +1450,98 @@ internal sealed class RemoteAvatar
                 $"handAfter={hand.Bone.position} " +
                 $"distance={Vector3.Distance(hand.Bone.position, target):F3}."
             );
+        }
+    }
+
+    /// <summary>
+    /// Exact two-bone solve: the wrist lands on the target instead of merely
+    /// pointing at it. The pole point chooses the elbow plane (down and out for
+    /// the weapon hold), which keeps the arms from folding through the chest.
+    /// </summary>
+    private static void SolveTwoBone(
+        Transform upper,
+        Transform lower,
+        Transform hand,
+        Vector3 target,
+        Vector3 polePoint,
+        float weight
+    )
+    {
+        Vector3 shoulder = upper.position;
+        Vector3 elbow = lower.position;
+        float upperLength = Vector3.Distance(shoulder, elbow);
+        float lowerLength = Vector3.Distance(elbow, hand.position);
+        if (upperLength < 0.0001f || lowerLength < 0.0001f)
+        {
+            return;
+        }
+
+        Vector3 toTarget = target - shoulder;
+        float distance = toTarget.magnitude;
+        if (distance < 0.0001f)
+        {
+            return;
+        }
+
+        distance = Mathf.Clamp(
+            distance,
+            Mathf.Abs(upperLength - lowerLength) + 0.001f,
+            upperLength + lowerLength - 0.001f
+        );
+        Vector3 axis = toTarget.normalized;
+        float along = (upperLength * upperLength -
+                       lowerLength * lowerLength +
+                       distance * distance) /
+                      (2.0f * distance);
+        float bendRadius = Mathf.Sqrt(
+            Mathf.Max(upperLength * upperLength - along * along, 0.0f)
+        );
+
+        Vector3 poleDirection = polePoint - shoulder;
+        Vector3 perpendicular = poleDirection -
+                                axis * Vector3.Dot(poleDirection, axis);
+        if (perpendicular.sqrMagnitude < 0.000001f)
+        {
+            perpendicular = (elbow - shoulder) -
+                            axis * Vector3.Dot(elbow - shoulder, axis);
+        }
+        if (perpendicular.sqrMagnitude < 0.000001f)
+        {
+            perpendicular = Vector3.Cross(axis, Vector3.up);
+        }
+        if (perpendicular.sqrMagnitude < 0.000001f)
+        {
+            perpendicular = Vector3.Cross(axis, Vector3.forward);
+        }
+
+        Vector3 desiredElbow = shoulder +
+                               axis * along +
+                               perpendicular.normalized * bendRadius;
+        Vector3 upperDirection = elbow - shoulder;
+        Vector3 desiredUpperDirection = desiredElbow - shoulder;
+        if (upperDirection.sqrMagnitude > 0.000001f &&
+            desiredUpperDirection.sqrMagnitude > 0.000001f)
+        {
+            upper.rotation =
+                Quaternion.Slerp(
+                    Quaternion.identity,
+                    Quaternion.FromToRotation(upperDirection, desiredUpperDirection),
+                    weight
+                ) * upper.rotation;
+        }
+
+        Vector3 newElbow = lower.position;
+        Vector3 forearmDirection = hand.position - newElbow;
+        Vector3 desiredForearmDirection = target - newElbow;
+        if (forearmDirection.sqrMagnitude > 0.000001f &&
+            desiredForearmDirection.sqrMagnitude > 0.000001f)
+        {
+            lower.rotation =
+                Quaternion.Slerp(
+                    Quaternion.identity,
+                    Quaternion.FromToRotation(forearmDirection, desiredForearmDirection),
+                    weight
+                ) * lower.rotation;
         }
     }
 
