@@ -141,7 +141,7 @@ public sealed class RemoteWeaponIK : MonoBehaviour
         CacheBones();
         BendSupportArm(grab.position, _weight);
 
-        if (!_loggedTarget)
+        if (!_loggedTarget && _weight > 0.9f)
         {
             _loggedTarget = true;
             Vector3 handPosition = _leftHand != null

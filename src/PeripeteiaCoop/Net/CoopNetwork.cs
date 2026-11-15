@@ -44,7 +44,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 9;
+    private const int ProtocolVersion = 10;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
 
@@ -541,6 +541,9 @@ internal sealed class CoopNetwork : IDisposable
         writer.Put(snapshot.LocalScale.x);
         writer.Put(snapshot.LocalScale.y);
         writer.Put(snapshot.LocalScale.z);
+        writer.Put(snapshot.LossyScale.x);
+        writer.Put(snapshot.LossyScale.y);
+        writer.Put(snapshot.LossyScale.z);
         writer.Put(snapshot.RootRotation.x);
         writer.Put(snapshot.RootRotation.y);
         writer.Put(snapshot.RootRotation.z);
@@ -581,6 +584,11 @@ internal sealed class CoopNetwork : IDisposable
             reader.GetFloat()
         );
         var scale = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+        var lossyScale = new Vector3(
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat()
+        );
         var rootRotation = new Quaternion(
             reader.GetFloat(),
             reader.GetFloat(),
@@ -622,6 +630,7 @@ internal sealed class CoopNetwork : IDisposable
             position,
             rotation,
             scale,
+            lossyScale,
             rootRotation,
             hasHandGrip,
             handGripLocalPosition,

@@ -55,6 +55,7 @@ internal sealed class RemoteAvatar
     private Vector3 _weaponLocalPosition;
     private Quaternion _weaponLocalRotation = Quaternion.identity;
     private Vector3 _weaponLocalScale = Vector3.one;
+    private Vector3 _weaponWorldScale = Vector3.one;
     private Quaternion _weaponRootRotation = Quaternion.identity;
     private bool _weaponUseHandAnchor;
     private Transform? _weaponHand;
@@ -66,6 +67,7 @@ internal sealed class RemoteAvatar
     private Quaternion _weaponHandGripLocalRotation = Quaternion.identity;
     private bool _weaponHasHandGrip;
     private bool _weaponPlacementLogged;
+    private bool _weaponHoldLogged;
     private string _weaponRightGrabPath = string.Empty;
     private string _weaponLeftGrabPath = string.Empty;
     private bool _weaponOneHanded;
@@ -412,6 +414,7 @@ internal sealed class RemoteAvatar
         _weaponLocalPosition = snapshot.LocalPosition;
         _weaponLocalRotation = snapshot.LocalRotation;
         _weaponLocalScale = snapshot.LocalScale;
+        _weaponWorldScale = snapshot.LossyScale;
         _weaponRootRotation = snapshot.RootRotation;
         _weaponHandGripLocalPosition = snapshot.HandGripLocalPosition;
         _weaponHandGripLocalRotation = snapshot.HandGripLocalRotation;
@@ -726,13 +729,14 @@ internal sealed class RemoteAvatar
         }
 
         _weaponPlacementLogged = false;
+        _weaponHoldLogged = false;
         visual.transform.SetParent(parent, false);
         _weaponVisual = visual;
         _weaponHand = useHandAnchor ? hand : null;
         _weaponUseHandAnchor = useHandAnchor;
         _weaponVisual.transform.localPosition = _weaponLocalPosition;
         _weaponVisual.transform.localRotation = _weaponLocalRotation;
-        _weaponVisual.transform.localScale = _weaponLocalScale;
+        ApplyWeaponScale(_weaponVisual.transform);
 
         _weaponRightGrab = FindGrabPoint(visual.transform, _weaponRightGrabPath, true);
         _weaponLeftGrab = FindGrabPoint(visual.transform, _weaponLeftGrabPath, false);
@@ -800,6 +804,33 @@ internal sealed class RemoteAvatar
 
         UpdateWeaponIk();
 
+        Bounds weaponBounds = default;
+        bool hasWeaponBounds = false;
+        foreach (Renderer renderer in visual.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer == null || !renderer.enabled)
+            {
+                continue;
+            }
+
+            if (!hasWeaponBounds)
+            {
+                weaponBounds = renderer.bounds;
+                hasWeaponBounds = true;
+            }
+            else
+            {
+                weaponBounds.Encapsulate(renderer.bounds);
+            }
+        }
+
+        Vector3 boundsCenterLocal = hasWeaponBounds
+            ? visual.transform.InverseTransformPoint(weaponBounds.center)
+            : Vector3.zero;
+        Vector3 boundsSizeLocal = hasWeaponBounds
+            ? visual.transform.InverseTransformVector(weaponBounds.size)
+            : Vector3.zero;
+
         CoopPlugin.LogSource.LogInfo(
             $"[avatar] id={Id} weapon visual '{_weaponItemName}' slot='{parent.name}' " +
             $"parentPath='{_weaponParentPath}' " +
@@ -823,6 +854,10 @@ internal sealed class RemoteAvatar
             $"handWorld={(hand != null ? hand.position : Vector3.zero)} " +
             $"muzzle={(_weaponMuzzle != null ? _weaponMuzzle.name : "<none>")} " +
             $"barrelLocal={_weaponBarrelLocalDirection} " +
+            $"worldScale={_weaponVisual.transform.lossyScale} " +
+            $"senderWorldScale={_weaponWorldScale} " +
+            $"boundsCenterLocal={boundsCenterLocal} " +
+            $"boundsSizeLocal={boundsSizeLocal} " +
             $"animator={(_weaponAnimator != null ? _weaponAnimator.name : "<none>")}."
         );
     }
@@ -945,6 +980,23 @@ internal sealed class RemoteAvatar
         return new Vector3(0.0f, CoopPlugin.WeaponPalmOffset, 0.0f);
     }
 
+    private void ApplyWeaponScale(Transform weapon)
+    {
+        if (_weaponWorldScale.sqrMagnitude < 0.000001f)
+        {
+            weapon.localScale = _weaponLocalScale;
+            return;
+        }
+
+        Transform? parent = weapon.parent;
+        Vector3 parentScale = parent != null ? parent.lossyScale : Vector3.one;
+        weapon.localScale = new Vector3(
+            Mathf.Abs(parentScale.x) > 0.0001f ? _weaponWorldScale.x / parentScale.x : _weaponWorldScale.x,
+            Mathf.Abs(parentScale.y) > 0.0001f ? _weaponWorldScale.y / parentScale.y : _weaponWorldScale.y,
+            Mathf.Abs(parentScale.z) > 0.0001f ? _weaponWorldScale.z / parentScale.z : _weaponWorldScale.z
+        );
+    }
+
     private void ApplyWeaponTransform()
     {
         if (_weaponVisual == null)
@@ -953,7 +1005,7 @@ internal sealed class RemoteAvatar
         }
 
         Transform weapon = _weaponVisual.transform;
-        weapon.localScale = _weaponLocalScale;
+        ApplyWeaponScale(weapon);
 
         if (!_weaponUseHandAnchor || _weaponHand == null || Root == null)
         {
@@ -1283,8 +1335,18 @@ internal sealed class RemoteAvatar
             aimDirection = Root.transform.forward;
         }
 
+        // Use the barrel only for the vertical aim. The forward part of the hold
+        // must stay in front of the body even if a weapon model's local barrel
+        // axis points backwards. Otherwise the hands end up inside the chest.
+        aimDirection.Normalize();
+        float aimPitch = Mathf.Asin(Mathf.Clamp(aimDirection.y, -1.0f, 1.0f));
+        Vector3 holdDirection = (
+            Root.transform.forward * Mathf.Cos(aimPitch) +
+            Vector3.up * Mathf.Sin(aimPitch)
+        ).normalized;
+
         Vector3 target = chest +
-                         aimDirection.normalized * 0.45f +
+                         holdDirection * 0.50f +
                          Root.transform.right * 0.07f;
 
         float reach = (lower.Bone.position - upper.Bone.position).magnitude +
@@ -1317,6 +1379,17 @@ internal sealed class RemoteAvatar
             );
             lower.Bone.rotation = Quaternion.Slerp(Quaternion.identity, lowerDelta, weight) *
                                   lower.Bone.rotation;
+        }
+
+        if (!_weaponHoldLogged)
+        {
+            _weaponHoldLogged = true;
+            CoopPlugin.LogSource.LogInfo(
+                $"[avatar] id={Id} weapon hold target={target} chest={chest} " +
+                $"shoulder={shoulder} aim={aimDirection} pitch={aimPitch:F2} " +
+                $"handAfter={hand.Bone.position} " +
+                $"distance={Vector3.Distance(hand.Bone.position, target):F3}."
+            );
         }
     }
 

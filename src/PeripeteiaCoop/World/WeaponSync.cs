@@ -425,10 +425,43 @@ internal static class WeaponSync
                         attachedGun.LeftGrab.position
                     )
                     : -1.0f;
+                Vector3 rightGrabLocalToWeapon = weapon.InverseTransformPoint(
+                    attachedGun.RightGrab.position
+                );
+                Bounds senderBounds = default;
+                bool hasSenderBounds = false;
+                foreach (Renderer renderer in weapon.GetComponentsInChildren<Renderer>(true))
+                {
+                    if (renderer == null || !renderer.enabled)
+                    {
+                        continue;
+                    }
+
+                    if (!hasSenderBounds)
+                    {
+                        senderBounds = renderer.bounds;
+                        hasSenderBounds = true;
+                    }
+                    else
+                    {
+                        senderBounds.Encapsulate(renderer.bounds);
+                    }
+                }
+
+                Vector3 senderBoundsCenter = hasSenderBounds
+                    ? weapon.InverseTransformPoint(senderBounds.center)
+                    : Vector3.zero;
+                Vector3 senderBoundsSize = hasSenderBounds
+                    ? weapon.InverseTransformVector(senderBounds.size)
+                    : Vector3.zero;
                 CoopPlugin.LogSource.LogInfo(
                     $"[weapon] grip diagnostic item='{itemName}' held='{heldName}' " +
                     $"hand='{rightHand.name}' grab='{attachedGun.RightGrab.name}' " +
                     $"grabLocal={attachedGun.RightGrab.localPosition} " +
+                    $"grabLocalToWeapon={rightGrabLocalToWeapon} " +
+                    $"weaponLossyScale={weapon.lossyScale} " +
+                    $"boundsCenterLocal={senderBoundsCenter} " +
+                    $"boundsSizeLocal={senderBoundsSize} " +
                     $"handGrip={handGripLocalPosition} " +
                     $"handGripRot={handGripLocalRotation.eulerAngles} " +
                     $"handWorld={rightHand.position} " +
@@ -472,6 +505,7 @@ internal static class WeaponSync
             weapon.localPosition,
             weapon.localRotation,
             weapon.localScale,
+            weapon.lossyScale,
             Quaternion.Inverse(localPlayer.transform.rotation) * weapon.rotation,
             hasHandGrip,
             handGripLocalPosition,
@@ -804,6 +838,7 @@ internal readonly struct WeaponSnapshot
         Vector3 localPosition,
         Quaternion localRotation,
         Vector3 localScale,
+        Vector3 lossyScale,
         Quaternion rootRotation,
         bool hasHandGrip,
         Vector3 handGripLocalPosition,
@@ -828,6 +863,7 @@ internal readonly struct WeaponSnapshot
         LocalPosition = localPosition;
         LocalRotation = localRotation;
         LocalScale = localScale;
+        LossyScale = lossyScale;
         RootRotation = rootRotation;
         HasHandGrip = hasHandGrip;
         HandGripLocalPosition = handGripLocalPosition;
@@ -861,6 +897,8 @@ internal readonly struct WeaponSnapshot
     public Quaternion LocalRotation { get; }
 
     public Vector3 LocalScale { get; }
+
+    public Vector3 LossyScale { get; }
 
     /// <summary>
     /// Weapon rotation relative to the player root. The local weapon lives on a
