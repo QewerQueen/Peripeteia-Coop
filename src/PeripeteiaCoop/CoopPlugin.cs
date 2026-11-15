@@ -27,9 +27,13 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool BlockClientSaves { get; private set; } = true;
 
+    internal static bool ShowStatusOverlay { get; private set; } = true;
+
     internal static CoopSettings Settings { get; private set; } = null!;
 
     internal static CoopNetwork? Network { get; private set; }
+
+    internal static bool IsCoopActive => Settings.Role != CoopRole.Offline;
 
     internal static bool ShouldBlockClientSaves =>
         BlockClientSaves && Settings.Role == CoopRole.Client;
@@ -58,6 +62,13 @@ public sealed class CoopPlugin : BasePlugin
             "BlockSaves",
             true,
             "Prevent a co-op client from writing save files. Loading is unaffected."
+        ).Value;
+
+        ShowStatusOverlay = Config.Bind(
+            "Ui",
+            "ShowStatus",
+            true,
+            "Show a small connection status overlay in co-op mode."
         ).Value;
 
         Settings = CoopSettings.Parse(Environment.GetCommandLineArgs());
@@ -109,8 +120,26 @@ public sealed class CoopPlugin : BasePlugin
         harmony.PatchAll(typeof(ClientBlockQueuedSavePatch));
         harmony.PatchAll(typeof(ClientBlockAutosavePatch));
 
+        if (Settings.Role != CoopRole.Offline)
+        {
+            harmony.PatchAll(typeof(DoorRegisterStartPatch));
+            harmony.PatchAll(typeof(DoorRegisterOnStartPatch));
+            harmony.PatchAll(typeof(ItemRegisterStartPatch));
+            harmony.PatchAll(typeof(ItemRegisterOnStartPatch));
+            harmony.PatchAll(typeof(ItemRegisterOnLoadPatch));
+            harmony.PatchAll(typeof(ItemRegisterDroppedPatch));
+            harmony.PatchAll(typeof(ItemRegisterDroppedDetailedPatch));
+            harmony.PatchAll(typeof(WeaponFireSimplePatch));
+            harmony.PatchAll(typeof(WeaponFireAtPointPatch));
+            harmony.PatchAll(typeof(WeaponFireAtPointTriggerPatch));
+            harmony.PatchAll(typeof(DisableTimeControllerPausePatch));
+            harmony.PatchAll(typeof(DisableFocusPausePatch));
+            harmony.PatchAll(typeof(MainMenuOpenProbePatch));
+        }
+
         LogSource.LogInfo(
-            "Harmony patches applied: probes, network tick, client save protection."
+            "Harmony patches applied: probes, network tick, client save protection, " +
+            "doors, items, weapons and co-op pause policy."
         );
         LogSource.LogInfo("Ready. Solo test: launch a second instance; see docs/SOLO_TESTING.md.");
     }
@@ -118,5 +147,10 @@ public sealed class CoopPlugin : BasePlugin
     internal static void Tick(PlayerMovement? localPlayer)
     {
         Network?.Tick(localPlayer);
+    }
+
+    internal static void LateTick()
+    {
+        Network?.LateTick();
     }
 }

@@ -4,8 +4,9 @@
 
 .DESCRIPTION
     Both instances share the same game folder and BepInEx plugins.
-    BepInEx writes one log per running instance; Unity logs are written to
-    local/logs/host.log and local/logs/client.log.
+    BepInEx writes one log per running instance (BepInEx/LogOutput.log and
+    LogOutput.1.log). local/logs/host.log and local/logs/client.log may be
+    empty because BepInEx takes over the Unity log.
 
 .EXAMPLE
     .\scripts\run-two.ps1
@@ -19,9 +20,12 @@ param(
     [int]$ClientWidth = 960,
     [int]$ClientHeight = 540,
     [int]$Port = 7777,
+    [string]$LoadSave = "",
     [switch]$NoClient,
     [switch]$NoCoop,
-    [switch]$AutoPilot
+    [switch]$AutoPilot,
+    [switch]$DoorTest,
+    [switch]$ProceduralAnimation
 )
 
 $ErrorActionPreference = "Stop"
@@ -68,6 +72,18 @@ $hostCoop = if ($NoCoop) { "" } else { " -coop-host -coop-port $Port -coop-name 
 $clientCoop = if ($NoCoop) { "" } else { " -coop-connect 127.0.0.1 -coop-port $Port -coop-name Client" }
 if ($AutoPilot -and -not $NoCoop) {
     $clientCoop += " -coop-autopilot"
+}
+if ($LoadSave -and -not $NoCoop) {
+    $loadArg = " -coop-load `"$LoadSave`""
+    $hostCoop += $loadArg
+    $clientCoop += $loadArg
+}
+if ($DoorTest -and -not $NoCoop) {
+    $hostCoop += " -coop-door-test"
+}
+if ($ProceduralAnimation -and -not $NoCoop) {
+    $hostCoop += " -coop-procedural-animation"
+    $clientCoop += " -coop-procedural-animation"
 }
 
 $hostArgs = "-screen-fullscreen 0 -screen-width $HostWidth -screen-height $HostHeight -logFile `"$hostLog`"$hostCoop"

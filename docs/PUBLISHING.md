@@ -9,6 +9,7 @@
 
 - исходники плагина (`src/`);
 - скрипты сборки/запуска/упаковки (`scripts/`);
+- шаблон конфигурации (`config/peripeteia.coop.cfg`);
 - документация (`docs/`, `README.md`, `LICENSE`);
 - настройки проекта (`.editorconfig`, `.gitattributes`, `.gitignore`,
   `Directory.Build.props`, `*.csproj`).
@@ -60,10 +61,14 @@ git grep -n -I -E "C:\\\\Users|D:\\\\SteamLibrary|AppData|<your-user-name>|Deskt
 Ожидаемо:
 
 - `[net] Peer connected`, `[net] Player 1 is 'Client'`;
-- `[avatar] cloned player model: renderers=6, enabled=6, children=3`;
+- `[avatar] cloned player model: renderers=53, enabled=...`, клон виден после
+  первого `Grounded`-пакета и не висит в небе;
 - `poses: 1@(x,y,z)` меняются;
+- `[items] known=... groups=...` без массовых `applied hidden` для оружия NPC;
+- `[weapon] local item='...'` появляется при настоящем оружии в руках;
 - в логах нет `Exception`, `NullReference`, `Rejecting`;
-- обычный одиночный запуск без `-coop-*` не меняет поведение игры.
+- обычный одиночный запуск без `-coop-*` не меняет поведение игры;
+- ESC открывает меню, но `[pause] timeScale` остаётся `1,00`.
 
 Если версия игры обновилась, interop-сборки и дампы нужно сгенерировать
 заново, а совместимость — перепроверить.
@@ -78,7 +83,8 @@ git grep -n -I -E "C:\\\\Users|D:\\\\SteamLibrary|AppData|<your-user-name>|Deskt
 | Unity | `2021.3.11f1`, IL2CPP x64 |
 | BepInEx | `6.0.0-be.793+dbc82f0` (bleeding edge, IL2CPP) |
 | LiteNetLib | `1.3.5` |
-| Мод | `0.1.0` |
+| Мод | `0.3.0` |
+| Протокол | `7` |
 
 Правила:
 
@@ -107,6 +113,7 @@ artifacts/PeripeteiaCoop-<version>.zip
 ```
 BepInEx/plugins/PeripeteiaCoop/PeripeteiaCoop.dll
 BepInEx/plugins/PeripeteiaCoop/LiteNetLib.dll
+BepInEx/config/peripeteia.coop.cfg
 INSTALL.txt
 README.md
 LICENSE
@@ -126,7 +133,7 @@ docs/*.md
 
    ```powershell
    git add -A
-   git commit -m "Initial co-op prototype: UDP session, remote avatar, pose sync"
+   git commit -m "Release 0.3.0: weapons, items, animation and pause fixes"
    git branch -M main
    git remote add origin https://github.com/<user>/<repo>.git
    git push -u origin main
@@ -135,16 +142,16 @@ docs/*.md
 4. Создай тег и релиз:
 
    ```powershell
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.3.0
+   git push origin v0.3.0
    ```
 
 5. В GitHub Release:
 
    - приложи ZIP из `artifacts/`;
    - укажи SHA256 (печатает `package.ps1`);
-   - перечисли ограничения: статичная модель, нет синхронизации AI/дверей/
-     предметов/квестов/сцен, клиент не сохраняется;
+   - перечисли ограничения: инвентарь/патроны/урон/квесты/NPC/сцены не
+     синхронизируются; предметы и оружие — прототипы; клиент не сохраняется;
    - укажи поддерживаемую версию игры и BepInEx;
    - добавь инструкцию по порту 7777/UDP и VPN-мешу.
 

@@ -6,6 +6,7 @@
     The archive is written to artifacts/ (git-ignored) and contains:
       BepInEx/plugins/PeripeteiaCoop/PeripeteiaCoop.dll
       BepInEx/plugins/PeripeteiaCoop/LiteNetLib.dll
+      BepInEx/config/peripeteia.coop.cfg
       INSTALL.txt
       README.md
       LICENSE
@@ -55,12 +56,15 @@ if (Test-Path -LiteralPath $stage) {
 }
 
 $pluginStage = Join-Path $stage "BepInEx\plugins\PeripeteiaCoop"
+$configStage = Join-Path $stage "BepInEx\config"
 $docsStage = Join-Path $stage "docs"
 New-Item -ItemType Directory -Force -Path $pluginStage | Out-Null
+New-Item -ItemType Directory -Force -Path $configStage | Out-Null
 New-Item -ItemType Directory -Force -Path $docsStage | Out-Null
 
 Copy-Item -LiteralPath $pluginDll -Destination $pluginStage
 Copy-Item -LiteralPath $liteNetLibDll -Destination $pluginStage
+Copy-Item -LiteralPath (Join-Path $root "config\peripeteia.coop.cfg") -Destination $configStage
 Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $stage
 Copy-Item -Path (Join-Path $root "docs\*.md") -Destination $docsStage
@@ -77,19 +81,31 @@ REQUIREMENTS
 INSTALL
   1. Install BepInEx 6 into the game folder.
   2. Launch the game once, wait for "Chainloader startup complete", close it.
-  3. Copy the folder BepInEx\plugins\PeripeteiaCoop into the game's
-     BepInEx\plugins\ directory.
+  3. Copy BepInEx\plugins\PeripeteiaCoop into the game's BepInEx\plugins\
+     directory. Copy BepInEx\config\peripeteia.coop.cfg into BepInEx\config\
+     (or keep your existing config; it is generated on first launch).
   4. Host:    Peripeteia.exe -coop-host -coop-port 7777 -coop-name Host
      Client:  Peripeteia.exe -coop-connect <host-ip> -coop-port 7777 -coop-name Friend
   5. Start the same level or save in both windows.
+
+WHAT WORKS
+  - Full cloned player model with the game's animations, Q/E lean and a
+    simplified dragging-hand pose.
+  - Host-authoritative doors.
+  - Prototype world items: pickup/drop/drag for items already in the scene.
+  - Visual held-weapon replication and muzzle flashes, using a real game
+    ItemInfo on the receiving side. Ammo, damage and inventory are local.
+  - ESC menu opens without pausing the world; focus loss does not open it.
 
 NOTES
   - A co-op client cannot write saves (Client.BlockSaves=true by default).
   - Internet play needs UDP port 7777 forwarded, or a VPN mesh such as
     ZeroTier/Tailscale. The game has no Steam P2P networking.
-  - The remote player model is currently static; only position/rotation is
-    synchronized. AI, doors, items, inventory, quests and scene transitions are
-    not synchronized yet.
+  - Inventory, equipment ownership, ammo, damage, quests, NPC reactions and
+    scene transitions are not synchronized yet. This is an early prototype,
+    not a complete co-op campaign.
+  - Both players need the same game version and mod version. Pin the game
+    version because updates can break the IL2CPP interop.
 
 More details: README.md and docs/SOLO_TESTING.md.
 "@

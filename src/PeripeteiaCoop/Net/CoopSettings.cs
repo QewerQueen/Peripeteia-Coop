@@ -25,6 +25,12 @@ internal sealed class CoopSettings
 
     public bool AutoPilot { get; private set; }
 
+    public bool DoorTest { get; private set; }
+
+    public bool GameAnimator { get; private set; } = true;
+
+    public string LoadSaveName { get; private set; } = string.Empty;
+
     public static CoopSettings Parse(string[] args)
     {
         var settings = new CoopSettings();
@@ -71,6 +77,29 @@ internal sealed class CoopSettings
                 case "-coop-autopilot":
                 case "--coop-autopilot":
                     settings.AutoPilot = true;
+                    break;
+
+                case "-coop-door-test":
+                case "--coop-door-test":
+                    settings.DoorTest = true;
+                    break;
+
+                case "-coop-game-animator":
+                case "--coop-game-animator":
+                    settings.GameAnimator = true;
+                    break;
+
+                case "-coop-procedural-animation":
+                case "--coop-procedural-animation":
+                    settings.GameAnimator = false;
+                    break;
+
+                case "-coop-load":
+                case "--coop-load":
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                    {
+                        settings.LoadSaveName = args[++i];
+                    }
                     break;
             }
         }

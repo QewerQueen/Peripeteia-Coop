@@ -2,11 +2,16 @@
 
 An experimental co-op / multiplayer mod for **Peripeteia** (Unity 2021.3.11f1, IL2CPP, x64).
 
-> Status: **early prototype (M2)**. Two game instances can connect over UDP,
-> spawn a cloned Marie model for the other player and synchronize position and
-> rotation at 30 Hz. The remote model is currently static (animation is the next
-> milestone). AI, interactions, inventory, quests and scene transitions are not
-> synchronized yet. Do not expect a complete co-op playthrough at this stage.
+> Status: **early public prototype (M4: items and weapons)**. Two game instances
+> can connect over UDP, spawn a complete cloned Marie model for the other player,
+> synchronize position and rotation at 30 Hz and drive her full game animations,
+> including Q/E leaning and the dragging hand. Visual held-weapon replication
+> and muzzle flashes are experimental. Doors are synchronized host-authoritatively,
+> and a prototype world-item layer mirrors pickup/drop/drag for items that already
+> exist in the scene. The client reconnects automatically after a host restart.
+> Inventory contents, ammo, damage, quests, NPC reactions and scene transitions
+> are not synchronized yet. Do not expect a complete co-op playthrough at this
+> stage.
 
 ## Why this is a big project
 
@@ -61,12 +66,12 @@ Solo testing is a first-class requirement for this project. Use:
 ```
 
 The script starts two instances: a host (`-coop-host`) and a client
-(`-coop-connect 127.0.0.1`). It backs up `EASaves` first and writes separate
-Unity logs to `local/logs/`. With `-coop-*` arguments the plugin forces
-`Application.runInBackground`, so the unfocused instance keeps running. A co-op
-client also refuses manual saves,
-queued saves and level-start autosaves, so it cannot overwrite the host's
-progress. Loading is not affected.
+(`-coop-connect 127.0.0.1`). It backs up `EASaves` first and creates
+`local/logs/`, though BepInEx writes the useful log to
+`BepInEx/LogOutput.log` and `BepInEx/LogOutput.1.log`. With `-coop-*` arguments
+the plugin forces `Application.runInBackground`, so the unfocused instance keeps
+running. A co-op client also refuses manual saves, queued saves and level-start
+autosaves, so it cannot overwrite the host's progress. Loading is not affected.
 
 To make the client move by itself while you watch the host window:
 
@@ -74,16 +79,37 @@ To make the client move by itself while you watch the host window:
 .\scripts\run-two.ps1 -AutoPilot
 ```
 
-Then start the same save in both windows. The other player is a cloned Marie
-model that slides between received poses; it does not animate yet. See
-[docs/SOLO_TESTING.md](docs/SOLO_TESTING.md) for details, or the Russian
+Then start the same save in both windows. The autopilot waits until the loaded
+save is standing on the ground before it starts moving, so it does not lock the
+test client at a temporary spawn point high above the map. The other player is a complete cloned
+Marie model driven by the game's own Animator, so idle, walk, crouch and jump
+animations are used. The clone has no gameplay scripts, colliders, camera or
+audio, which makes running the Animator safe. The remote Animator uses unscaled
+time, so the other player keeps animating when you open the menu or inventory.
+If the Animator ever causes trouble, launch with
+`-coop-procedural-animation` to use the old lightweight fallback. Q/E leaning is
+applied to the clone after the Animator, and dragging a world object bends the
+remote left arm toward the carried item.
+In co-op the ESC menu still opens, but `TimeController.Pause` is suppressed, so
+the world keeps running; losing focus no longer opens the menu automatically.
+A normal single-player launch is unchanged.
+Doors opened on the host are mirrored to the client. A prototype item layer
+mirrors world items that already exist in the scene: pickup hides the item on
+the other side, drop restores it, and dragging moves it. It uses last-writer-wins
+and does not transfer inventory contents or item ownership; newly spawned items
+are best-effort. The currently held weapon is cloned from a real game `ItemInfo`
+and placed on the remote puppet; firing/reload/swing body states and muzzle
+flashes are replayed. This is visual only: ammo, damage, attachments and
+inventory are not shared. A small overlay shows the connection state; disable it
+with `Ui.ShowStatus = false` in the BepInEx config.
+See [docs/SOLO_TESTING.md](docs/SOLO_TESTING.md) for details, or the Russian
 step-by-step guide below.
 
 ## Пошаговый гайд: проверить кооп в игре
 
 Это проверка на одном ПК: одно окно — хост, второе — клиент. Полноценное
-совместное прохождение пока невозможно, но подключение и синхронизацию
-движения так проверить можно.
+совместное прохождение пока невозможно, но подключение, движение, анимации,
+наклоны, перетаскивание, двери и часть мировых предметов так проверить можно.
 
 ### 1. Создай общее сохранение
 
@@ -119,16 +145,42 @@ cd C:\Path\To\PeripeteiaCoop
 
 ### 3. Что должно получиться
 
-- Второй игрок появится как **клон Марии**.
+- Второй игрок появится как **полный клон Марии**.
 - Клон двигается и поворачивается, когда двигается второй игрок.
-- Модель пока **статичная**: ходьба, прыжок и приседание не проигрываются,
-  клон просто скользит между позициями.
-- Мир у каждого свой: двери, AI, предметы, инвентарь и квесты не
+- У клона работают **полноценные анимации игры**: стойка, ходьба, приседание,
+  прыжок. Игровой Animator запускается на клоне, с которого удалены все
+  геймплейные скрипты, коллайдеры, камера и звук. Если на твоём ПК это вызовет
+  проблему, запусти игру с `-coop-procedural-animation` — будет упрощённая
+  процедурная анимация.
+- **Наклоны Q/E** повторяются на удалённом персонаже. Если наклоны не видны,
+  проверь, что в игре они вообще срабатывают у локального игрока.
+- **Перетаскивание предмета** видно второму игроку: его персонаж наклоняется,
+  а левая рука тянется к предмету. Это упрощённая IK-поза, а не покадровая
+  копия анимации.
+- В кооп-режиме **меню по ESC открывается, но мир не встаёт на паузу**.
+  Потеря фокуса окном меню не открывает. Иначе второе окно замирало бы, пока
+  ты смотришь на первое. В обычном одиночном запуске пауза работает как раньше.
+- **Двери синхронизируются от хоста**: если хост открыл или закрыл дверь,
+  клиент увидит то же состояние.
+- **Мировые предметы** (которые уже лежат в сцене) частично синхронизируются:
+  подбор скрывает предмет у второго игрока, бросок возвращает его, а
+  перетаскивание двигает. Это прототип по принципу «побеждает последний
+  изменивший»; содержимое инвентаря и владение предметом не передаются.
+- **Оружие в руках** — экспериментальный визуальный прототип. На удалённом
+  персонаже показывается клон настоящего игрового предмета, а выстрел,
+  перезарядка и удар повторяются анимацией. Мод не создаёт оружие «из
+  воздуха»: если на другой стороне нет подходящего `ItemInfo`, оружие просто
+  не отображается. Патроны, урон, обвесы и инвентарь пока локальные.
+- **Инвентарь, экипировка, квесты, AI и переходы между сценами** пока не
   синхронизируются.
+- Если связь пропала, клиент сам переподключится примерно через 2 секунды
+  после возвращения хоста. Вверху экрана есть небольшой статус подключения.
 
 Проверка: подвигайся в окне host — клон в окне client должен повторять
-позицию. Потом наоборот. Можно запустить `.\scripts\run-two.ps1 -AutoPilot`,
-тогда хост будет двигаться сам.
+позицию и шагать. Потом наоборот. Нажми Q/E — клон должен наклоняться.
+Подними и перетащи предмет — клон должен потянуться рукой. Можно запустить
+`.\scripts\run-two.ps1 -AutoPilot`, тогда клиент будет двигаться сам.
+Открой дверь на хосте — клиент должен увидеть её открытой.
 
 ### 4. Смотри логи
 
@@ -145,7 +197,9 @@ Select-String -Path .\local\logs\host.log, .\local\logs\client.log `
 ```text
 [net] Peer connected: id=1 ...
 [net] Player 1 is 'Client'.
-[avatar] cloned player model: renderers=6, enabled=6, children=3
+[avatar] cloned player model: renderers=53, enabled=53, children=3
+[avatar] full animation Animator enabled on 'UpperMesh'.
+[doors] registered=18 scene='tutorial'.
 [net] role=Host peers=1 avatars=1 ...
 ```
 
@@ -158,8 +212,10 @@ Exception
 NullReferenceException
 ```
 
-Если `local/logs` пустой, смотри `BepInEx\LogOutput.log` и
-`BepInEx\LogOutput.1.log` в папке игры.
+Если `local/logs` пустой (так бывает, потому что BepInEx забирает Unity-лог),
+смотри `BepInEx\LogOutput.log` и `BepInEx\LogOutput.1.log` в папке игры.
+Отладочные подробности (`[pose]`, дампы костей) включаются только через
+`[Probe] Enabled = true` в `BepInEx\config\peripeteia.coop.cfg`.
 
 ### 5. Если что-то не работает
 
@@ -170,11 +226,23 @@ NullReferenceException
   разложи плагин заново.
 - **Нет клона, но `avatars=1`** — клон может стоять в другой точке уровня.
   Подвигайся и посмотри вокруг.
+- **Клон выглядит неполным или в T-позе** — модель пересобирается после
+  загрузки уровня; если это не помогло, пришли `BepInEx\LogOutput.log` и
+  укажи, в каком окне что видно. Не удаляй `Animator` с клона вручную.
+- **Удалённый персонаж застыл в анимации захвата/лазания** — проверь, что
+  используется сборка 0.3.0+: анимация клона работает на unscaled time, а
+  пауза в кооп-режиме отключена. Если проблема осталась, пришли логи и укажи,
+  открывал ли ты инвентарь в этот момент.
+- **Мир не останавливается по ESC** — это сделано специально для кооп-режима:
+  меню открывается, но `TimeController.Pause` не срабатывает, чтобы неактивное
+  окно не замирало. Обычный запуск без `-coop-*` не меняется.
 - **Клиент не может загрузить уровень или начать новую игру** — временно
   поставь `BlockSaves = false` в `BepInEx\config\peripeteia.coop.cfg`. Но тогда
   клиент сможет затереть сохранение хоста.
-- **Двери/AI/предметы ведут себя по-разному** — это ожидаемо, мир пока не
-  синхронизирован.
+- **Предметы в инвентаре, оружие, патроны или квесты ведут себя по-разному** —
+  это ожидаемо: синхронизируются только двери, часть мировых предметов и
+  визуальный прототип оружия в руках. AI, инвентарь, экипировка, урон, квесты
+  и переходы между сценами пока локальные.
 
 После закрытия окон сейвы автоматически копируются в
 `local/saves_backup/<дата-время>/EASaves`.
@@ -202,13 +270,24 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
 
 ## Current limitations
 
-- Remote avatars are static; walk/jump/crouch animation is not applied yet.
-- Skins, equipment and weapons of the other player are not synchronized.
-- Only player poses are networked. AI, doors, items, inventory, dialogue,
-  quests and scene transitions are still local to each instance.
+- Remote avatars use the game's Animator, Q/E lean and a simplified drag-hand
+  pose. Held weapons are a visual prototype: the remote side clones a real
+  `ItemInfo`, and fire/reload/swing body states and muzzle flashes are replayed.
+  Exact IK, attachments, ammo and damage are not synchronized.
+- Skins, inventory contents, equipment ownership and the other player's item
+  list are not synchronized.
+- Doors and a prototype layer for world items already present in the scene are
+  networked. Item sync is last-writer-wins; dropped copies, containers and
+  newly spawned items can still diverge. AI reactions, dialogue, quests and
+  scene transitions are still local to each instance. Synchronizing them is the
+  next stage (M5-M6 in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 - Both instances must enter the same level manually.
 - Both players need the same mod version and game version; the handshake rejects
-  mismatches. There is no automatic reconnect after a host restart yet.
+  mismatches. A client reconnects automatically after a host restart, but the
+  level itself is not transferred.
+- In co-op the ESC menu opens but the world is not paused; focus loss no longer
+  opens the menu. This is intentional for solo testing; a normal single-player
+  launch keeps the original behavior.
 - Internet play needs port forwarding or a VPN mesh (ZeroTier/Tailscale);
   the game has no Steam P2P/Workshop networking.
 
@@ -238,9 +317,9 @@ with BepInEx. The build references them from `BepInEx/interop`.
 ```
 
 This builds `artifacts/PeripeteiaCoop-<version>.zip` with only the two plugin
-DLLs, install notes and user docs. The GitHub/publishing checklist (personal
-data scan, version pinning, release steps) is in
-[docs/PUBLISHING.md](docs/PUBLISHING.md).
+DLLs, a default `peripeteia.coop.cfg`, install notes and user docs. The
+GitHub/publishing checklist (personal data scan, version pinning, release steps)
+is in [docs/PUBLISHING.md](docs/PUBLISHING.md).
 
 ## Legal
 
@@ -255,8 +334,11 @@ MIT (see [LICENSE](LICENSE)).
 ---
 
 Кратко по-русски: это экспериментальный кооп-мод. Сейчас два экземпляра игры
-соединяются по UDP, видят друг друга в виде клона Марии и синхронизируют
-позицию/поворот (30 Гц). Удалённая модель пока статична — анимация следующий
-этап. Клиент не может перезаписать сохранения. AI, двери, предметы, инвентарь,
-квесты и переходы между сценами ещё не синхронизируются. Инструкции — в
-`docs/`, сборка — `scripts/build.ps1`, тест на одном ПК — `scripts/run-two.ps1`.
+соединяются по UDP, видят друг друга в виде полного клона Марии и синхронизируют
+позицию/поворот (30 Гц), полноценные игровые анимации, наклоны, двери и
+визуальный прототип оружия в руках. Клиент не может перезаписать сохранения, но
+умеет переподключаться после перезапуска хоста. Мировые предметы
+синхронизируются частично; инвентарь, патроны, урон, квесты, реакции NPC и
+переходы между сценами ещё не синхронизируются — это следующие этапы.
+Инструкции — в `docs/`, сборка — `scripts/build.ps1`, тест на одном ПК —
+`scripts/run-two.ps1`.
