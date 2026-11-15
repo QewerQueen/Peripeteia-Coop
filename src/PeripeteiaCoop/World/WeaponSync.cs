@@ -454,6 +454,19 @@ internal static class WeaponSync
                 Vector3 senderBoundsSize = hasSenderBounds
                     ? weapon.InverseTransformVector(senderBounds.size)
                     : Vector3.zero;
+                var weaponRenderers = new List<string>();
+                foreach (Renderer renderer in weapon.GetComponentsInChildren<Renderer>(true))
+                {
+                    if (renderer == null)
+                    {
+                        continue;
+                    }
+
+                    weaponRenderers.Add(
+                        $"{BuildRelativePath(renderer.transform, weapon)}" +
+                        $"{(renderer.enabled ? "" : "(off)")}"
+                    );
+                }
                 CoopPlugin.LogSource.LogInfo(
                     $"[weapon] grip diagnostic item='{itemName}' held='{heldName}' " +
                     $"hand='{rightHand.name}' grab='{attachedGun.RightGrab.name}' " +
@@ -462,6 +475,7 @@ internal static class WeaponSync
                     $"weaponLossyScale={weapon.lossyScale} " +
                     $"boundsCenterLocal={senderBoundsCenter} " +
                     $"boundsSizeLocal={senderBoundsSize} " +
+                    $"renderers='{string.Join("|", weaponRenderers)}' " +
                     $"handGrip={handGripLocalPosition} " +
                     $"handGripRot={handGripLocalRotation.eulerAngles} " +
                     $"handWorld={rightHand.position} " +

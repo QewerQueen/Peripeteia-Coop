@@ -806,9 +806,18 @@ internal sealed class RemoteAvatar
 
         Bounds weaponBounds = default;
         bool hasWeaponBounds = false;
+        var weaponRendererNames = new List<string>();
         foreach (Renderer renderer in visual.GetComponentsInChildren<Renderer>(true))
         {
-            if (renderer == null || !renderer.enabled)
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            weaponRendererNames.Add(
+                $"{renderer.name}{(renderer.enabled ? "" : "(off)")}"
+            );
+            if (!renderer.enabled)
             {
                 continue;
             }
@@ -858,6 +867,7 @@ internal sealed class RemoteAvatar
             $"senderWorldScale={_weaponWorldScale} " +
             $"boundsCenterLocal={boundsCenterLocal} " +
             $"boundsSizeLocal={boundsSizeLocal} " +
+            $"renderers='{string.Join("|", weaponRendererNames)}' " +
             $"animator={(_weaponAnimator != null ? _weaponAnimator.name : "<none>")}."
         );
     }
