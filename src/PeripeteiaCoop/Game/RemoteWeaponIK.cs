@@ -13,6 +13,9 @@ public sealed class RemoteWeaponIK : MonoBehaviour
 {
     private Animator? _animator;
     private Transform? _leftGrab;
+    private Transform? _leftUpperArm;
+    private Transform? _leftLowerArm;
+    private Transform? _leftHand;
     private Vector3 _handRotationMod;
     private float _weight;
     private bool _targetActive;
@@ -24,6 +27,19 @@ public sealed class RemoteWeaponIK : MonoBehaviour
     {
         _animator = animator;
         _handRotationMod = handRotationMod;
+        CacheBones();
+    }
+
+    private void CacheBones()
+    {
+        if (_animator == null || !_animator.isHuman)
+        {
+            return;
+        }
+
+        _leftUpperArm ??= _animator.GetBoneTransform(HumanBodyBones.LeftUpperArm);
+        _leftLowerArm ??= _animator.GetBoneTransform(HumanBodyBones.LeftLowerArm);
+        _leftHand ??= _animator.GetBoneTransform(HumanBodyBones.LeftHand);
     }
 
     public void SetHandRotationMod(Vector3 handRotationMod)
@@ -41,6 +57,48 @@ public sealed class RemoteWeaponIK : MonoBehaviour
     {
         _leftGrab = null;
         _targetActive = false;
+    }
+
+    private void BendSupportArm(Vector3 target, float weight)
+    {
+        if (_leftUpperArm == null || _leftLowerArm == null || _leftHand == null)
+        {
+            return;
+        }
+
+        // Point the support arm at the weapon before Unity's IK solve. If the
+        // target is reachable the IK solver refines the hand; if it is not, the
+        // arm still looks like it is trying to hold the weapon instead of
+        // hanging at the side.
+        Vector3 shoulder = _leftUpperArm.position;
+        Vector3 upperDirection = _leftLowerArm.position - shoulder;
+        Vector3 targetDirection = target - shoulder;
+        if (upperDirection.sqrMagnitude > 0.0001f &&
+            targetDirection.sqrMagnitude > 0.0001f)
+        {
+            Quaternion upperDelta = Quaternion.FromToRotation(
+                upperDirection.normalized,
+                targetDirection.normalized
+            );
+            _leftUpperArm.rotation =
+                Quaternion.Slerp(Quaternion.identity, upperDelta, weight) *
+                _leftUpperArm.rotation;
+        }
+
+        Vector3 elbow = _leftLowerArm.position;
+        Vector3 forearmDirection = _leftHand.position - elbow;
+        Vector3 elbowTarget = target - elbow;
+        if (forearmDirection.sqrMagnitude > 0.0001f &&
+            elbowTarget.sqrMagnitude > 0.0001f)
+        {
+            Quaternion lowerDelta = Quaternion.FromToRotation(
+                forearmDirection.normalized,
+                elbowTarget.normalized
+            );
+            _leftLowerArm.rotation =
+                Quaternion.Slerp(Quaternion.identity, lowerDelta, weight) *
+                _leftLowerArm.rotation;
+        }
     }
 
     private void OnAnimatorIK(int layerIndex)
@@ -80,12 +138,14 @@ public sealed class RemoteWeaponIK : MonoBehaviour
         }
 
         Transform grab = _leftGrab!;
+        CacheBones();
+        BendSupportArm(grab.position, _weight);
+
         if (!_loggedTarget)
         {
             _loggedTarget = true;
-            Transform? leftHand = _animator.GetBoneTransform(HumanBodyBones.LeftHand);
-            Vector3 handPosition = leftHand != null
-                ? leftHand.position
+            Vector3 handPosition = _leftHand != null
+                ? _leftHand.position
                 : Vector3.zero;
             CoopPlugin.LogSource.LogInfo(
                 $"[avatar] weapon IK target='{grab.name}' " +
