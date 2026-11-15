@@ -991,7 +991,7 @@ internal sealed class RemoteAvatar
         }
 
         float gripLength = _weaponHandGripLocalPosition.magnitude;
-        if (gripLength < 0.002f || gripLength > 0.12f)
+        if (gripLength > 0.12f)
         {
             return;
         }
@@ -1085,14 +1085,14 @@ internal sealed class RemoteAvatar
             return;
         }
 
-        // The sender's real hand-to-grip offset is the best source. Guard it:
-        // rightHandObj on some rigs points at the GrabPoint itself (zero
-        // offset) or at a first-person helper far from the body hand. In those
-        // cases use the palm direction along the hand bone instead.
+        // The sender's real hand-to-grip offset is the best source. A zero
+        // offset is valid here: the original IK puts the right hand bone
+        // exactly on the weapon's GrabPoint. Only reject a helper that is far
+        // away from the body hand.
         Vector3 handGrip = _weaponHandGripLocalPosition;
         float handGripLength = handGrip.magnitude;
         bool usedFallbackGrip = false;
-        if (!_weaponHasHandGrip || handGripLength < 0.002f || handGripLength > 0.12f)
+        if (!_weaponHasHandGrip || handGripLength > 0.12f)
         {
             handGrip = GetFallbackHandGrip(_weaponHand);
             usedFallbackGrip = true;
