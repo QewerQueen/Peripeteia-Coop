@@ -32,6 +32,11 @@ internal static class WeaponSync
     private static bool _lastVisible;
     private static string _lastDescriptor = string.Empty;
     private static string _lastGripDiagnostic = string.Empty;
+    private static Vector3 _lastShootAim;
+    private static Vector3 _lastGeneralAim;
+    private static Vector3 _lastAimPoint;
+    private static Vector3 _lastAimDirection;
+    private static Vector3 _lastMuzzleWorld;
 
     public static void Tick(PlayerMovement? localPlayer)
     {
@@ -85,6 +90,11 @@ internal static class WeaponSync
             CoopPlugin.LogSource.LogInfo(
                 $"[weapon] probe shoot='{snapshot.ItemName}' visible={snapshot.Visible} " +
                 $"parent='{snapshot.ParentPath}' muzzle='{snapshot.MuzzlePath}' " +
+                $"aim={snapshot.CameraAim} " +
+                $"aimPitch={Mathf.Asin(Mathf.Clamp(snapshot.CameraAim.y, -1.0f, 1.0f)):F2} " +
+                $"shootAim={_lastShootAim} generalAim={_lastGeneralAim} " +
+                $"aimPoint={_lastAimPoint} muzzle={_lastMuzzleWorld} " +
+                $"aimDir={_lastAimDirection} " +
                 $"anim={snapshot.AnimatorActive} hash={snapshot.AnimatorHash} " +
                 $"renderers={(snapshot.WeaponTransform != null ? CountRenderers(snapshot.WeaponTransform) : 0)}."
             );
@@ -321,6 +331,7 @@ internal static class WeaponSync
         snapshot = default;
 
         PlayerShootScript? shoot = GetShoot(localPlayer);
+        CameraPivot? pivot = localPlayer.camPivot;
         Transform? weapon = ResolveWeaponRoot(shoot != null ? shoot.currentlyHeld : null);
         if (weapon == null)
         {
@@ -484,6 +495,12 @@ internal static class WeaponSync
                     $"leftWorld={leftGrabWorld} grabDistance={grabDistance:F3} " +
                     $"rightGrabPath='{rightGrabPath}' leftGrabPath='{leftGrabPath}' " +
                     $"handUp={rightHand.up} handForward={rightHand.forward} " +
+                    $"shootAim={(attachedGun != null ? attachedGun.shootDirection : Vector3.zero)} " +
+                    $"generalAim={(attachedGun != null ? attachedGun.generalDirection.direction : Vector3.zero)} " +
+                    $"aimPoint={(shoot != null ? shoot.cameraLookPoint : Vector3.zero)} " +
+                    $"camPivotPitch={(pivot != null ? pivot.pitch : 0.0f):F2} " +
+                    $"camPivotYaw={(pivot != null ? pivot.yaw : 0.0f):F2} " +
+                    $"camRotation={(pivot != null ? pivot.camRotation : Vector3.zero)} " +
                     $"parent='{parentPath}'."
                 );
             }
@@ -508,6 +525,97 @@ internal static class WeaponSync
             }
         }
 
+        // The actual bullet/aim direction is the most reliable source. The
+        // first-person weapon mesh has a "ready" angle and Camera.main can sit
+        // behind the player in third-person, so neither one matches the
+        // crosshair. Shoot.shootDirection / generalDirection / cameraLookPoint
+        // are the values the game itself uses for aiming.
+        Shoot? heldGun = shoot != null ? shoot.AttachedGun : null;
+        if (heldGun == null)
+        {
+            heldGun = weapon.GetComponent<Shoot>();
+        }
+
+        Vector3 shootAim = heldGun != null ? heldGun.shootDirection : Vector3.zero;
+        Vector3 generalAim = heldGun != null
+            ? heldGun.generalDirection.direction
+            : Vector3.zero;
+        Vector3 aimPoint = shoot != null ? shoot.cameraLookPoint : Vector3.zero;
+        Vector3 muzzleWorld = heldGun != null && heldGun.muzzle != null
+            ? heldGun.muzzle.position
+            : weapon.position;
+        Vector3 aimWorld = Vector3.zero;
+
+        // The shoot direction is a world-space aim point on this build. Using
+        // the point-to-muzzle vector makes the remote pistol aim at whatever
+        // the local crosshair is on, which is usually the remote avatar itself
+        // when the players look at each other. That looked like the pistol was
+        // pointing into the character's own head/chest. The third-person pose
+        // must instead use the sender's camera pitch relative to the body:
+        // forward = extended arms, up/down = the same pose tilted vertically.
+        Vector3 bodyFlat = localPlayer.transform.forward;
+        bodyFlat.y = 0.0f;
+        if (bodyFlat.sqrMagnitude < 0.0001f)
+        {
+            bodyFlat = Vector3.forward;
+        }
+        bodyFlat.Normalize();
+
+        if (pivot != null)
+        {
+            // CameraPivot.pitch is in degrees. In this game positive pitch
+            // looks up and negative pitch looks down (camRotation.x is the
+            // opposite sign). Ignore the tiny rest offset so "straight ahead"
+            // still gives a horizontal pistol.
+            float pitchDegrees = pivot.pitch;
+            if (Mathf.Abs(pitchDegrees) < 4.0f)
+            {
+                pitchDegrees = 0.0f;
+            }
+
+            float pitchRadians = pitchDegrees * Mathf.Deg2Rad;
+            aimWorld = bodyFlat * Mathf.Cos(pitchRadians) +
+                       Vector3.up * Mathf.Sin(pitchRadians);
+        }
+
+        if (aimWorld.sqrMagnitude < 0.0001f)
+        {
+            // Fallback only if the camera pivot is unavailable.
+            if (shootAim.sqrMagnitude > 0.0001f &&
+                (Vector3.Distance(shootAim, aimPoint) < 1.0f ||
+                 shootAim.sqrMagnitude > 4.0f))
+            {
+                aimWorld = shootAim - muzzleWorld;
+            }
+            else if (shootAim.sqrMagnitude > 0.0001f)
+            {
+                aimWorld = shootAim;
+            }
+            else if (generalAim.sqrMagnitude > 0.0001f)
+            {
+                aimWorld = generalAim;
+            }
+            else if (aimPoint.sqrMagnitude > 0.0001f)
+            {
+                aimWorld = aimPoint - muzzleWorld;
+            }
+        }
+
+        if (aimWorld.sqrMagnitude > 0.0001f)
+        {
+            aimWorld.Normalize();
+        }
+        else
+        {
+            aimWorld = bodyFlat;
+        }
+
+        _lastShootAim = shootAim;
+        _lastGeneralAim = generalAim;
+        _lastAimPoint = aimPoint;
+        _lastAimDirection = aimWorld;
+        _lastMuzzleWorld = muzzleWorld;
+
         snapshot = new WeaponSnapshot(
             visible: true,
             itemName,
@@ -521,6 +629,7 @@ internal static class WeaponSync
             weapon.localScale,
             weapon.lossyScale,
             Quaternion.Inverse(localPlayer.transform.rotation) * weapon.rotation,
+            aimWorld,
             hasHandGrip,
             handGripLocalPosition,
             handGripLocalRotation,
@@ -854,6 +963,7 @@ internal readonly struct WeaponSnapshot
         Vector3 localScale,
         Vector3 lossyScale,
         Quaternion rootRotation,
+        Vector3 cameraAim,
         bool hasHandGrip,
         Vector3 handGripLocalPosition,
         Quaternion handGripLocalRotation,
@@ -879,6 +989,7 @@ internal readonly struct WeaponSnapshot
         LocalScale = localScale;
         LossyScale = lossyScale;
         RootRotation = rootRotation;
+        CameraAim = cameraAim;
         HasHandGrip = hasHandGrip;
         HandGripLocalPosition = handGripLocalPosition;
         HandGripLocalRotation = handGripLocalRotation;
@@ -920,6 +1031,12 @@ internal readonly struct WeaponSnapshot
     /// body, so the remote side uses this world-aim rotation instead.
     /// </summary>
     public Quaternion RootRotation { get; }
+
+    /// <summary>
+    /// Sender's camera forward direction. This is the real look/aim direction;
+    /// the first-person weapon mesh can be held at a different "ready" angle.
+    /// </summary>
+    public Vector3 CameraAim { get; }
 
     public bool HasHandGrip { get; }
 

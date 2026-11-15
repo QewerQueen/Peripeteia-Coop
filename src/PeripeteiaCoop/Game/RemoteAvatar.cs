@@ -57,6 +57,7 @@ internal sealed class RemoteAvatar
     private Vector3 _weaponLocalScale = Vector3.one;
     private Vector3 _weaponWorldScale = Vector3.one;
     private Quaternion _weaponRootRotation = Quaternion.identity;
+    private Vector3 _weaponCameraAim = Vector3.zero;
     private bool _weaponUseHandAnchor;
     private Transform? _weaponHand;
     private Transform? _weaponRightGrab;
@@ -400,6 +401,7 @@ internal sealed class RemoteAvatar
             _weaponDescriptor = string.Empty;
             _weaponItemName = string.Empty;
             _weaponHasHandGrip = false;
+            _weaponCameraAim = Vector3.zero;
             DestroyWeaponVisual();
             return;
         }
@@ -422,6 +424,7 @@ internal sealed class RemoteAvatar
         _weaponLocalScale = snapshot.LocalScale;
         _weaponWorldScale = snapshot.LossyScale;
         _weaponRootRotation = snapshot.RootRotation;
+        _weaponCameraAim = snapshot.CameraAim;
         _weaponHandGripLocalPosition = snapshot.HandGripLocalPosition;
         _weaponHandGripLocalRotation = snapshot.HandGripLocalRotation;
         _weaponHasHandGrip = snapshot.HasHandGrip;
@@ -657,10 +660,17 @@ internal sealed class RemoteAvatar
         Vector3 weaponCenter = _weaponVisual.transform.TransformPoint(
             _weaponBoundsCenterLocal
         );
+        Vector3 barrelWorld = _weaponVisual.transform.rotation *
+                              _weaponBarrelLocalDirection;
+        Vector3 muzzleWorld = _weaponMuzzle != null
+            ? _weaponMuzzle.position
+            : Vector3.zero;
         CoopPlugin.LogSource.LogInfo(
             $"[avatar] id={Id} weapon probe hold={_weaponHoldWeight:F2} " +
             $"ikWeight={(_weaponIk != null ? _weaponIk.CurrentWeight : 0.0f):F2} " +
             $"pitch={_lastWeaponAimPitch:F2} aim={_lastWeaponAimDirection} " +
+            $"barrelLocal={_weaponBarrelLocalDirection} barrelWorld={barrelWorld} " +
+            $"muzzleWorld={muzzleWorld} " +
             $"target={_lastWeaponHoldTarget} " +
             $"rightHand={rightHand} rightDistance={Vector3.Distance(rightHand, _lastWeaponHoldTarget):F3} " +
             $"leftHand={leftHand} " +
@@ -873,17 +883,11 @@ internal sealed class RemoteAvatar
         EnsureWeaponIk();
 
         _weaponMuzzle = FindWeaponMuzzle(visual.transform, _weaponMuzzlePath);
-        _weaponBarrelLocalDirection = Vector3.forward;
-        if (_weaponMuzzle != null)
-        {
-            Vector3 barrel = visual.transform.InverseTransformDirection(
-                _weaponMuzzle.position - visual.transform.position
-            );
-            if (barrel.sqrMagnitude > 0.0001f)
-            {
-                _weaponBarrelLocalDirection = barrel.normalized;
-            }
-        }
+        _weaponBarrelLocalDirection = FindBarrelLocalDirection(
+            visual.transform,
+            _weaponMuzzle,
+            _weaponGripLocalPosition
+        );
         _weaponFlash = null;
         _weaponAnimator = null;
         foreach (Animator animator in visual.GetComponentsInChildren<Animator>(true))
@@ -1029,6 +1033,31 @@ internal sealed class RemoteAvatar
         );
     }
 
+    private Quaternion GetRemoteWeaponRotation()
+    {
+        Quaternion rotation = Root != null
+            ? Root.transform.rotation * _weaponRootRotation
+            : _weaponRootRotation;
+
+        if (_weaponCameraAim.sqrMagnitude < 0.0001f)
+        {
+            return rotation;
+        }
+
+        Vector3 barrel = rotation * _weaponBarrelLocalDirection;
+        if (barrel.sqrMagnitude < 0.0001f)
+        {
+            return rotation;
+        }
+
+        // Point the barrel along the sender's camera aim. The first-person
+        // weapon mesh has its own "ready" angle; copying that angle onto the
+        // third-person body makes the pistol point up into the face even when
+        // the sender is looking straight ahead.
+        Vector3 aim = _weaponCameraAim.normalized;
+        return Quaternion.FromToRotation(barrel.normalized, aim) * rotation;
+    }
+
     private void ApplyWeaponHandRotation()
     {
         if (!_weaponUseHandAnchor ||
@@ -1048,7 +1077,7 @@ internal sealed class RemoteAvatar
 
         // The sender sends the real hand-to-GrabPoint rotation. Apply it so the
         // remote wrist wraps the grip in the same way as the original IK.
-        Quaternion weaponRotation = Root.transform.rotation * _weaponRootRotation;
+        Quaternion weaponRotation = GetRemoteWeaponRotation();
         Quaternion gripWorldRotation = weaponRotation * _weaponGripLocalRotation;
         Quaternion handRotation =
             gripWorldRotation * Quaternion.Inverse(_weaponHandGripLocalRotation);
@@ -1154,7 +1183,7 @@ internal sealed class RemoteAvatar
 
         // Keep the weapon's real world orientation from the sender, so the
         // muzzle follows the camera aim even though the clone is third-person.
-        Quaternion weaponRotation = Root.transform.rotation * _weaponRootRotation;
+        Quaternion weaponRotation = GetRemoteWeaponRotation();
         Vector3 gripOffset = Vector3.zero;
         if (_weaponRightGrab != null)
         {
@@ -1262,6 +1291,92 @@ internal sealed class RemoteAvatar
         }
 
         return current == root ? null : current;
+    }
+
+    /// <summary>
+    /// Finds the weapon's barrel axis in weapon-local space. The game's Muzzle
+    /// helper is not always on the barrel: on the Makarov the reported offset is
+    /// far outside the weapon bounds, and using it as the barrel made the pistol
+    /// point up while the arms were horizontal. Prefer a muzzle that actually
+    /// lies on the weapon, otherwise use the longest side of the render bounds
+    /// pointing away from the grip.
+    /// </summary>
+    private static Vector3 FindBarrelLocalDirection(
+        Transform weapon,
+        Transform? muzzle,
+        Vector3 gripLocal
+    )
+    {
+        Bounds bounds = default;
+        bool hasBounds = false;
+        foreach (Renderer renderer in weapon.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer == null || !renderer.enabled)
+            {
+                continue;
+            }
+
+            if (!hasBounds)
+            {
+                bounds = renderer.bounds;
+                hasBounds = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
+        }
+
+        if (!hasBounds)
+        {
+            return Vector3.forward;
+        }
+
+        Vector3 centerLocal = weapon.InverseTransformPoint(bounds.center);
+        Vector3 sizeLocal = weapon.InverseTransformVector(bounds.size);
+        sizeLocal = new Vector3(
+            Mathf.Abs(sizeLocal.x),
+            Mathf.Abs(sizeLocal.y),
+            Mathf.Abs(sizeLocal.z)
+        );
+        float longest = Mathf.Max(sizeLocal.x, Mathf.Max(sizeLocal.y, sizeLocal.z));
+        if (longest < 0.0001f)
+        {
+            return Vector3.forward;
+        }
+
+        if (muzzle != null)
+        {
+            Vector3 muzzleLocal = weapon.InverseTransformPoint(muzzle.position);
+            float muzzleDistance = Vector3.Distance(muzzleLocal, centerLocal);
+            if (muzzleDistance <= longest * 1.25f)
+            {
+                Vector3 fromGrip = muzzleLocal - gripLocal;
+                if (fromGrip.sqrMagnitude > 0.0001f)
+                {
+                    return fromGrip.normalized;
+                }
+            }
+        }
+
+        Vector3 axis = Vector3.forward;
+        if (sizeLocal.y >= sizeLocal.x && sizeLocal.y >= sizeLocal.z)
+        {
+            axis = Vector3.up;
+        }
+        else if (sizeLocal.x >= sizeLocal.z)
+        {
+            axis = Vector3.right;
+        }
+
+        // The grip sits at the back of the weapon, so the barrel points from
+        // the grip toward the center of the render bounds.
+        if (Vector3.Dot(axis, centerLocal - gripLocal) < 0.0f)
+        {
+            axis = -axis;
+        }
+
+        return axis;
     }
 
     private static Transform? FindWeaponMuzzle(Transform weapon, string path)
@@ -1446,35 +1561,47 @@ internal sealed class RemoteAvatar
             ? chestBone.Bone.position
             : Root.transform.position + Vector3.up * 0.75f;
 
-        // Follow the real barrel direction, not only the body yaw. This is what
-        // moves the hands and the weapon up and down when the sender aims.
-        Quaternion aimRotation = Root.transform.rotation * _weaponRootRotation;
-        Vector3 aimDirection = aimRotation * _weaponBarrelLocalDirection;
+        // Follow the real camera aim, not the first-person weapon mesh. The
+        // weapon mesh can sit at a "ready" angle that is far above the camera,
+        // which made the hands rise and the pistol cover the face while the
+        // sender was looking straight ahead.
+        Vector3 aimDirection = _weaponCameraAim;
         if (aimDirection.sqrMagnitude < 0.0001f)
         {
-            aimDirection = Root.transform.forward;
+            aimDirection = GetRemoteWeaponRotation() * _weaponBarrelLocalDirection;
         }
 
-        // Use the barrel only for the vertical aim. The forward part of the hold
-        // must stay in front of the body even if a weapon model's local barrel
-        // axis points backwards. Otherwise the hands end up inside the chest.
+        // Use the camera only for the vertical aim. The forward part of the
+        // hold must stay in front of the body even if the camera looks nearly
+        // straight up or down. Otherwise the hands end up inside the chest.
         aimDirection.Normalize();
         float aimPitch = Mathf.Asin(Mathf.Clamp(aimDirection.y, -1.0f, 1.0f));
-
-        // Follow the barrel for the vertical aim so the hands rise with the
-        // weapon, but always keep a forward component. Without that bias the
-        // hands sit directly above the chest when aiming straight up; with too
-        // small a vertical part they stay at chest height. The minimum forward
-        // part keeps them in front of the body instead of behind the back.
         float verticalAim = Mathf.Clamp(Mathf.Sin(aimPitch), -1.0f, 1.0f);
-        float forwardAim = Mathf.Cos(aimPitch);
+        Vector3 aimFlat = new Vector3(aimDirection.x, 0.0f, aimDirection.z);
+        if (aimFlat.sqrMagnitude < 0.0001f)
+        {
+            aimFlat = Root.transform.forward;
+        }
+        aimFlat.Normalize();
+
+        // Always keep the hands a little in front of the body. At horizontal
+        // aim the target is straight ahead; looking all the way up or down
+        // still leaves enough forward offset to keep the wrists and pistol out
+        // of the chest instead of folding them into it. The original pose is
+        // an extended two-hand grip at every pitch, so use one constant reach
+        // rather than shortening the hold near vertical.
+        const float forwardBias = 0.35f;
+        const float holdDistance = 0.95f;
         Vector3 holdDirection = (
-            Root.transform.forward * Mathf.Max(forwardAim, 0.35f) +
+            aimFlat * forwardBias +
             Vector3.up * verticalAim
         ).normalized;
+        if (holdDirection.sqrMagnitude < 0.0001f)
+        {
+            holdDirection = aimFlat;
+        }
 
-        Vector3 target = chest +
-                         holdDirection * 0.42f;
+        Vector3 target = chest + holdDirection * holdDistance;
         _lastWeaponHoldTarget = target;
         _lastWeaponAimDirection = aimDirection;
         _lastWeaponAimPitch = aimPitch;
