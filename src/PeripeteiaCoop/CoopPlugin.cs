@@ -29,6 +29,10 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool ShowStatusOverlay { get; private set; } = true;
 
+    internal static float WeaponGripDown { get; private set; } = 0.04f;
+
+    internal static float WeaponGripForward { get; private set; } = 0.015f;
+
     internal static CoopSettings Settings { get; private set; } = null!;
 
     internal static CoopNetwork? Network { get; private set; }
@@ -69,6 +73,20 @@ public sealed class CoopPlugin : BasePlugin
             "ShowStatus",
             true,
             "Show a small connection status overlay in co-op mode."
+        ).Value;
+
+        WeaponGripDown = Config.Bind(
+            "Weapon",
+            "GripDown",
+            0.04f,
+            "Lower the remote weapon from the wrist bone, in meters. Increase this if the gun floats above the hand."
+        ).Value;
+
+        WeaponGripForward = Config.Bind(
+            "Weapon",
+            "GripForward",
+            0.015f,
+            "Move the remote weapon toward the fingers, in meters. Small adjustments only."
         ).Value;
 
         Settings = CoopSettings.Parse(Environment.GetCommandLineArgs());

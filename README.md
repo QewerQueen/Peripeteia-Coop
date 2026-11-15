@@ -100,9 +100,10 @@ and does not transfer inventory contents or item ownership; newly spawned items
 are best-effort. The currently held weapon is cloned from a real game `ItemInfo`
 and attached to the remote puppet's right-hand bone, using the sender's aim
 rotation; firing/reload/swing body states and muzzle flashes are replayed. This
-is visual only: ammo, damage, attachments and inventory are not shared. A small
-overlay shows the connection state; disable it with `Ui.ShowStatus = false` in
-the BepInEx config.
+is visual only: ammo, damage, attachments and inventory are not shared. The
+grip offset can be tuned with `Weapon.GripDown` and `Weapon.GripForward` in the
+BepInEx config. A small overlay shows the connection state; disable it with
+`Ui.ShowStatus = false` in the BepInEx config.
 See [docs/SOLO_TESTING.md](docs/SOLO_TESTING.md) for details, or the Russian
 step-by-step guide below.
 
@@ -170,9 +171,11 @@ cd C:\Path\To\PeripeteiaCoop
 - **Оружие в руках** — экспериментальный визуальный прототип. На удалённом
   персонаже показывается клон настоящего игрового предмета, прикреплённый к
   кости правой кисти; направление ствола берётся из прицела отправителя, а
-  выстрел, перезарядка и удар повторяются анимацией. Мод не создаёт оружие «из
-  воздуха»: если на другой стороне нет подходящего `ItemInfo`, оружие просто
-  не отображается. Патроны, урон, обвесы и инвентарь пока локальные.
+  выстрел, перезарядка и удар повторяются анимацией. Если пистолет висит выше
+  кисти, увеличь `Weapon.GripDown` в конфиге BepInEx; если ниже — уменьши.
+  Мод не создаёт оружие «из воздуха»: если на другой стороне нет подходящего
+  `ItemInfo`, оружие просто не отображается. Патроны, урон, обвесы и инвентарь
+  пока локальные.
 - **Инвентарь, экипировка, квесты, AI и переходы между сценами** пока не
   синхронизируются.
 - Если связь пропала, клиент сам переподключится примерно через 2 секунды

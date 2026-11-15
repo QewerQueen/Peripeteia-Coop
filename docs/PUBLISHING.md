@@ -66,8 +66,9 @@ git grep -n -I -E "[A-Z]:\\\\Users|[A-Z]:\\\\SteamLibrary|AppData|<your-user-nam
 - `poses: 1@(x,y,z)` меняются;
 - `[items] known=... groups=...` без массовых `applied hidden` для оружия NPC;
 - `[weapon] local item='...'` появляется при настоящем оружии в руках;
-- `[avatar] ... anchor=hand`, `weaponWorld` совпадает с `handWorld` — оружие
-  удалённого игрока закреплено на правой кисти, а не за спиной;
+- `[avatar] ... anchor=hand`, `gripDown=...`, `weaponWorld` рядом с
+  `handWorld` — оружие удалённого игрока закреплено в правой кисти, а не за
+  спиной;
 - в логах нет `Exception`, `NullReference`, `Rejecting`;
 - обычный одиночный запуск без `-coop-*` не меняет поведение игры;
 - ESC открывает меню, но `[pause] timeScale` остаётся `1,00`.

@@ -678,6 +678,10 @@ internal sealed class RemoteAvatar
             ? Quaternion.identity
             : _weaponLocalRotation;
         _weaponVisual.transform.localScale = _weaponLocalScale;
+        if (useHandAnchor && hand != null)
+        {
+            _weaponVisual.transform.position = GetWeaponGripPosition(hand);
+        }
 
         _weaponMuzzle = FindWeaponMuzzle(visual.transform, _weaponMuzzlePath);
         _weaponFlash = null;
@@ -708,11 +712,31 @@ internal sealed class RemoteAvatar
         CoopPlugin.LogSource.LogInfo(
             $"[avatar] id={Id} weapon visual '{_weaponItemName}' slot='{parent.name}' " +
             $"anchor={(useHandAnchor ? "hand" : "path")} " +
+            $"gripDown={CoopPlugin.WeaponGripDown:F3} " +
+            $"gripForward={CoopPlugin.WeaponGripForward:F3} " +
             $"weaponWorld={_weaponVisual.transform.position} " +
             $"handWorld={(hand != null ? hand.position : Vector3.zero)} " +
             $"muzzle={(_weaponMuzzle != null ? _weaponMuzzle.name : "<none>")} " +
             $"animator={(_weaponAnimator != null ? _weaponAnimator.name : "<none>")}."
         );
+    }
+
+    private Vector3 GetWeaponGripPosition(Transform hand)
+    {
+        // Root-local axes keep the offset stable while the character turns or
+        // leans. Positive GripDown moves the gun downward; positive
+        // GripForward moves it toward the fingers.
+        Vector3 offset = new(
+            0.0f,
+            -CoopPlugin.WeaponGripDown,
+            CoopPlugin.WeaponGripForward
+        );
+        if (Root != null)
+        {
+            offset = Root.transform.rotation * offset;
+        }
+
+        return hand.position + offset;
     }
 
     private void ApplyWeaponTransform()
@@ -730,7 +754,11 @@ internal sealed class RemoteAvatar
             // method runs in Update; ApplyLatePose calls this again after the
             // Animator, so the gun follows the hand and keeps the sender's aim
             // direction without depending on the first-person WeaponLocation.
-            weapon.position = _weaponHand.position;
+            //
+            // Hand.R is the wrist, while the grip sits in the palm. GripDown and
+            // GripForward shift the gun from the wrist into the palm so the hand
+            // visually wraps around the grip instead of sitting below the gun.
+            weapon.position = GetWeaponGripPosition(_weaponHand);
             weapon.rotation = Root.transform.rotation * _weaponRootRotation;
             weapon.localScale = _weaponLocalScale;
             return;
