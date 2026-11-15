@@ -1461,18 +1461,16 @@ internal sealed class RemoteAvatar
         aimDirection.Normalize();
         float aimPitch = Mathf.Asin(Mathf.Clamp(aimDirection.y, -1.0f, 1.0f));
 
-        // Do not move the hands all the way above the head when aiming straight
-        // up. The original keeps both hands in front of the chest while the
-        // weapon itself rotates. Limiting the vertical part also keeps the
-        // support arm reachable.
-        //
-        // The horizontal part must come from the body, not from the barrel.
-        // Near vertical aim the barrel's horizontal component is tiny and can
-        // point backwards, which used to throw both hands behind the back.
+        // Follow the barrel for the vertical aim so the hands rise with the
+        // weapon, but always keep a forward component. Without that bias the
+        // hands sit directly above the chest when aiming straight up; with too
+        // small a vertical part they stay at chest height. The minimum forward
+        // part keeps them in front of the body instead of behind the back.
         float verticalAim = Mathf.Clamp(Mathf.Sin(aimPitch), -1.0f, 1.0f);
+        float forwardAim = Mathf.Cos(aimPitch);
         Vector3 holdDirection = (
-            Root.transform.forward +
-            Vector3.up * (verticalAim * 0.55f)
+            Root.transform.forward * Mathf.Max(forwardAim, 0.35f) +
+            Vector3.up * verticalAim
         ).normalized;
 
         Vector3 target = chest +
