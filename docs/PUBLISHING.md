@@ -40,7 +40,7 @@ git status --short
 Поиск типичных личных путей и имён:
 
 ```powershell
-git grep -n -I -E "C:\\\\Users|D:\\\\SteamLibrary|AppData|<your-user-name>|Desktop|Documents" -- . 2>$null
+git grep -n -I -E "[A-Z]:\\\\Users|[A-Z]:\\\\SteamLibrary|AppData|<your-user-name>|Desktop|Documents" -- . 2>$null
 ```
 
 Проверь также:
@@ -66,6 +66,8 @@ git grep -n -I -E "C:\\\\Users|D:\\\\SteamLibrary|AppData|<your-user-name>|Deskt
 - `poses: 1@(x,y,z)` меняются;
 - `[items] known=... groups=...` без массовых `applied hidden` для оружия NPC;
 - `[weapon] local item='...'` появляется при настоящем оружии в руках;
+- `[avatar] ... anchor=hand`, `weaponWorld` совпадает с `handWorld` — оружие
+  удалённого игрока закреплено на правой кисти, а не за спиной;
 - в логах нет `Exception`, `NullReference`, `Rejecting`;
 - обычный одиночный запуск без `-coop-*` не меняет поведение игры;
 - ESC открывает меню, но `[pause] timeScale` остаётся `1,00`.
@@ -83,8 +85,8 @@ git grep -n -I -E "C:\\\\Users|D:\\\\SteamLibrary|AppData|<your-user-name>|Deskt
 | Unity | `2021.3.11f1`, IL2CPP x64 |
 | BepInEx | `6.0.0-be.793+dbc82f0` (bleeding edge, IL2CPP) |
 | LiteNetLib | `1.3.5` |
-| Мод | `0.3.0` |
-| Протокол | `7` |
+| Мод | `0.3.1` |
+| Протокол | `8` |
 
 Правила:
 
@@ -133,7 +135,7 @@ docs/*.md
 
    ```powershell
    git add -A
-   git commit -m "Release 0.3.0: weapons, items, animation and pause fixes"
+   git commit -m "Release 0.3.1: fix remote weapon hand placement"
    git branch -M main
    git remote add origin https://github.com/<user>/<repo>.git
    git push -u origin main
@@ -142,8 +144,8 @@ docs/*.md
 4. Создай тег и релиз:
 
    ```powershell
-   git tag v0.3.0
-   git push origin v0.3.0
+   git tag v0.3.1
+   git push origin v0.3.1
    ```
 
 5. В GitHub Release:

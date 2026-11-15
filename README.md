@@ -98,10 +98,11 @@ mirrors world items that already exist in the scene: pickup hides the item on
 the other side, drop restores it, and dragging moves it. It uses last-writer-wins
 and does not transfer inventory contents or item ownership; newly spawned items
 are best-effort. The currently held weapon is cloned from a real game `ItemInfo`
-and placed on the remote puppet; firing/reload/swing body states and muzzle
-flashes are replayed. This is visual only: ammo, damage, attachments and
-inventory are not shared. A small overlay shows the connection state; disable it
-with `Ui.ShowStatus = false` in the BepInEx config.
+and attached to the remote puppet's right-hand bone, using the sender's aim
+rotation; firing/reload/swing body states and muzzle flashes are replayed. This
+is visual only: ammo, damage, attachments and inventory are not shared. A small
+overlay shows the connection state; disable it with `Ui.ShowStatus = false` in
+the BepInEx config.
 See [docs/SOLO_TESTING.md](docs/SOLO_TESTING.md) for details, or the Russian
 step-by-step guide below.
 
@@ -167,8 +168,9 @@ cd C:\Path\To\PeripeteiaCoop
   перетаскивание двигает. Это прототип по принципу «побеждает последний
   изменивший»; содержимое инвентаря и владение предметом не передаются.
 - **Оружие в руках** — экспериментальный визуальный прототип. На удалённом
-  персонаже показывается клон настоящего игрового предмета, а выстрел,
-  перезарядка и удар повторяются анимацией. Мод не создаёт оружие «из
+  персонаже показывается клон настоящего игрового предмета, прикреплённый к
+  кости правой кисти; направление ствола берётся из прицела отправителя, а
+  выстрел, перезарядка и удар повторяются анимацией. Мод не создаёт оружие «из
   воздуха»: если на другой стороне нет подходящего `ItemInfo`, оружие просто
   не отображается. Патроны, урон, обвесы и инвентарь пока локальные.
 - **Инвентарь, экипировка, квесты, AI и переходы между сценами** пока не
@@ -230,7 +232,7 @@ NullReferenceException
   загрузки уровня; если это не помогло, пришли `BepInEx\LogOutput.log` и
   укажи, в каком окне что видно. Не удаляй `Animator` с клона вручную.
 - **Удалённый персонаж застыл в анимации захвата/лазания** — проверь, что
-  используется сборка 0.3.0+: анимация клона работает на unscaled time, а
+  используется сборка 0.3.1+: анимация клона работает на unscaled time, а
   пауза в кооп-режиме отключена. Если проблема осталась, пришли логи и укажи,
   открывал ли ты инвентарь в этот момент.
 - **Мир не останавливается по ESC** — это сделано специально для кооп-режима:

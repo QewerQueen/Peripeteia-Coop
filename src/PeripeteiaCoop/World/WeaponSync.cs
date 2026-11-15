@@ -172,6 +172,26 @@ internal static class WeaponSync
             _shoot = localPlayer.GetComponentInParent<PlayerShootScript>();
         }
 
+        if (_shoot == null)
+        {
+            // On some setups the shooting controller lives on the camera rig,
+            // next to the player rather than below it. There is only one local
+            // shooting controller in a normal single-player/co-op instance.
+            foreach (PlayerShootScript candidate in Resources.FindObjectsOfTypeAll<PlayerShootScript>())
+            {
+                if (candidate == null ||
+                    candidate.gameObject == null ||
+                    !candidate.gameObject.activeInHierarchy ||
+                    candidate.gameObject.scene != localPlayer.gameObject.scene)
+                {
+                    continue;
+                }
+
+                _shoot = candidate;
+                break;
+            }
+        }
+
         return _shoot;
     }
 
@@ -325,6 +345,7 @@ internal static class WeaponSync
             weapon.localPosition,
             weapon.localRotation,
             weapon.localScale,
+            Quaternion.Inverse(localPlayer.transform.rotation) * weapon.rotation,
             animatorHash,
             animatorTime,
             animatorActive,
@@ -649,6 +670,7 @@ internal readonly struct WeaponSnapshot
         Vector3 localPosition,
         Quaternion localRotation,
         Vector3 localScale,
+        Quaternion rootRotation,
         int animatorHash,
         float animatorTime,
         bool animatorActive,
@@ -665,6 +687,7 @@ internal readonly struct WeaponSnapshot
         LocalPosition = localPosition;
         LocalRotation = localRotation;
         LocalScale = localScale;
+        RootRotation = rootRotation;
         AnimatorHash = animatorHash;
         AnimatorTime = animatorTime;
         AnimatorActive = animatorActive;
@@ -690,6 +713,13 @@ internal readonly struct WeaponSnapshot
     public Quaternion LocalRotation { get; }
 
     public Vector3 LocalScale { get; }
+
+    /// <summary>
+    /// Weapon rotation relative to the player root. The local weapon lives on a
+    /// first-person helper that is not animated on the cloned third-person
+    /// body, so the remote side uses this world-aim rotation instead.
+    /// </summary>
+    public Quaternion RootRotation { get; }
 
     public int AnimatorHash { get; }
 

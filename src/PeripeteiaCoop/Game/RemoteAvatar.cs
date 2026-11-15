@@ -54,7 +54,11 @@ internal sealed class RemoteAvatar
     private Vector3 _weaponLocalPosition;
     private Quaternion _weaponLocalRotation = Quaternion.identity;
     private Vector3 _weaponLocalScale = Vector3.one;
+    private Quaternion _weaponRootRotation = Quaternion.identity;
+    private bool _weaponUseHandAnchor = true;
+    private Transform? _weaponHand;
     private bool _weaponVisible;
+    private float _weaponHoldWeight;
     private float _nextWeaponBuildTime;
     private int _weaponAnimatorHash;
     private float _weaponAnimatorTime;
@@ -386,6 +390,7 @@ internal sealed class RemoteAvatar
         _weaponLocalPosition = snapshot.LocalPosition;
         _weaponLocalRotation = snapshot.LocalRotation;
         _weaponLocalScale = snapshot.LocalScale;
+        _weaponRootRotation = snapshot.RootRotation;
         _weaponAnimatorHash = snapshot.AnimatorHash;
         _weaponAnimatorTime = snapshot.AnimatorTime;
         _weaponAnimatorActive = snapshot.AnimatorActive;
@@ -494,6 +499,27 @@ internal sealed class RemoteAvatar
         }
 
         ApplyRemoteAction();
+
+        // While the remote avatar is idle with a weapon, bend the right arm into
+        // a simple holding pose. The full-body Animator still owns everything
+        // else and action clips (fire/reload/swing) are left untouched so their
+        // original arm animation remains visible.
+        float holdTarget = _weaponVisible &&
+                           _weaponVisual != null &&
+                           !_actionActive &&
+                           !_usingFallback
+            ? 1.0f
+            : 0.0f;
+        _weaponHoldWeight = Mathf.MoveTowards(
+            _weaponHoldWeight,
+            holdTarget,
+            deltaTime * 6.0f
+        );
+        if (_weaponHoldWeight > 0.01f)
+        {
+            ApplyWeaponHoldHand(_weaponHoldWeight);
+        }
+
         ApplyWeaponPose();
     }
 
@@ -592,7 +618,25 @@ internal sealed class RemoteAvatar
             return;
         }
 
-        Transform? parent = FindTransformByPath(Root.transform, _weaponParentPath);
+        // WeaponLocation is a first-person helper: the game moves it near the
+        // camera/first-person arms, not near the third-person skeleton. The
+        // cloned body has no first-person scripts, so a weapon parented there
+        // ends up behind the character. Put it on the actual right-hand bone;
+        // the aim rotation still comes from the sender so the gun points the
+        // same way.
+        Transform? hand = null;
+        if (_bones.TryGetValue(BoneRole.RightHand, out BoneState rightHand))
+        {
+            hand = rightHand.Bone;
+        }
+
+        bool useHandAnchor = hand != null;
+        Transform? parent = hand;
+        if (parent == null)
+        {
+            parent = FindTransformByPath(Root.transform, _weaponParentPath);
+        }
+
         if (parent == null)
         {
             parent = Root.transform.Find("UpperPivot/WeaponPivot/WeaponSlot");
@@ -618,12 +662,21 @@ internal sealed class RemoteAvatar
         }
 
         DestroyWeaponVisual();
-        ClearSlotChildren(parent);
+        if (!useHandAnchor)
+        {
+            ClearSlotChildren(parent);
+        }
 
         visual.transform.SetParent(parent, false);
         _weaponVisual = visual;
-        _weaponVisual.transform.localPosition = _weaponLocalPosition;
-        _weaponVisual.transform.localRotation = _weaponLocalRotation;
+        _weaponHand = useHandAnchor ? hand : null;
+        _weaponUseHandAnchor = useHandAnchor;
+        _weaponVisual.transform.localPosition = useHandAnchor
+            ? Vector3.zero
+            : _weaponLocalPosition;
+        _weaponVisual.transform.localRotation = useHandAnchor
+            ? Quaternion.identity
+            : _weaponLocalRotation;
         _weaponVisual.transform.localScale = _weaponLocalScale;
 
         _weaponMuzzle = FindWeaponMuzzle(visual.transform, _weaponMuzzlePath);
@@ -654,6 +707,9 @@ internal sealed class RemoteAvatar
 
         CoopPlugin.LogSource.LogInfo(
             $"[avatar] id={Id} weapon visual '{_weaponItemName}' slot='{parent.name}' " +
+            $"anchor={(useHandAnchor ? "hand" : "path")} " +
+            $"weaponWorld={_weaponVisual.transform.position} " +
+            $"handWorld={(hand != null ? hand.position : Vector3.zero)} " +
             $"muzzle={(_weaponMuzzle != null ? _weaponMuzzle.name : "<none>")} " +
             $"animator={(_weaponAnimator != null ? _weaponAnimator.name : "<none>")}."
         );
@@ -667,6 +723,19 @@ internal sealed class RemoteAvatar
         }
 
         Transform weapon = _weaponVisual.transform;
+
+        if (_weaponUseHandAnchor && _weaponHand != null && Root != null)
+        {
+            // The hand bone may be animated by the game Animator after this
+            // method runs in Update; ApplyLatePose calls this again after the
+            // Animator, so the gun follows the hand and keeps the sender's aim
+            // direction without depending on the first-person WeaponLocation.
+            weapon.position = _weaponHand.position;
+            weapon.rotation = Root.transform.rotation * _weaponRootRotation;
+            weapon.localScale = _weaponLocalScale;
+            return;
+        }
+
         weapon.localPosition = _weaponLocalPosition;
         weapon.localRotation = _weaponLocalRotation;
         weapon.localScale = _weaponLocalScale;
@@ -683,6 +752,7 @@ internal sealed class RemoteAvatar
         _weaponMuzzle = null;
         _weaponFlash = null;
         _weaponAnimator = null;
+        _weaponHand = null;
     }
 
     private static void ClearSlotChildren(Transform parent)
@@ -834,6 +904,67 @@ internal sealed class RemoteAvatar
                 lower.Bone.rotation = Quaternion.Slerp(Quaternion.identity, lowerDelta, weight) *
                                       lower.Bone.rotation;
             }
+        }
+    }
+
+    /// <summary>
+    /// Simple right-arm hold pose used only while the remote puppet is idle with
+    /// a weapon. It is intentionally additive and is disabled while a weapon
+    /// action clip is playing, so the original fire/reload/swing animation keeps
+    /// control of the arm.
+    /// </summary>
+    private void ApplyWeaponHoldHand(float weight)
+    {
+        if (!_bones.TryGetValue(BoneRole.RightUpperArm, out BoneState upper) ||
+            !_bones.TryGetValue(BoneRole.RightLowerArm, out BoneState lower) ||
+            !_bones.TryGetValue(BoneRole.RightHand, out BoneState hand) ||
+            upper.Bone == null ||
+            lower.Bone == null ||
+            hand.Bone == null ||
+            Root == null)
+        {
+            return;
+        }
+
+        Vector3 shoulder = upper.Bone.position;
+        Vector3 chest = _bones.TryGetValue(BoneRole.Chest, out BoneState chestBone) &&
+                        chestBone.Bone != null
+            ? chestBone.Bone.position
+            : Root.transform.position + Vector3.up * 0.75f;
+        Vector3 target = chest +
+                         Root.transform.forward * 0.45f +
+                         Root.transform.right * 0.10f;
+
+        float reach = (lower.Bone.position - upper.Bone.position).magnitude +
+                      (hand.Bone.position - lower.Bone.position).magnitude;
+        if (reach > 0.0001f)
+        {
+            target = shoulder + Vector3.ClampMagnitude(target - shoulder, reach * 0.92f);
+        }
+
+        Vector3 upperDirection = lower.Bone.position - shoulder;
+        Vector3 targetDirection = target - shoulder;
+        if (upperDirection.sqrMagnitude > 0.0001f && targetDirection.sqrMagnitude > 0.0001f)
+        {
+            Quaternion upperDelta = Quaternion.FromToRotation(
+                upperDirection.normalized,
+                targetDirection.normalized
+            );
+            upper.Bone.rotation = Quaternion.Slerp(Quaternion.identity, upperDelta, weight) *
+                                  upper.Bone.rotation;
+        }
+
+        Vector3 elbow = lower.Bone.position;
+        Vector3 forearmDirection = hand.Bone.position - elbow;
+        Vector3 elbowTarget = target - elbow;
+        if (forearmDirection.sqrMagnitude > 0.0001f && elbowTarget.sqrMagnitude > 0.0001f)
+        {
+            Quaternion lowerDelta = Quaternion.FromToRotation(
+                forearmDirection.normalized,
+                elbowTarget.normalized
+            );
+            lower.Bone.rotation = Quaternion.Slerp(Quaternion.identity, lowerDelta, weight) *
+                                  lower.Bone.rotation;
         }
     }
 
