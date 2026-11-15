@@ -43,6 +43,7 @@ internal sealed class RemoteAvatar
     // replaced by a visual built from the WeaponState packets.
     private GameObject? _weaponVisual;
     private Transform? _weaponMuzzle;
+    private Vector3 _weaponBarrelLocalDirection = Vector3.forward;
     private Light? _weaponFlash;
     private Animator? _weaponAnimator;
     private string _weaponDescriptor = string.Empty;
@@ -735,6 +736,13 @@ internal sealed class RemoteAvatar
 
         _weaponRightGrab = FindGrabPoint(visual.transform, _weaponRightGrabPath, true);
         _weaponLeftGrab = FindGrabPoint(visual.transform, _weaponLeftGrabPath, false);
+        Vector3 leftGrabLocal = Vector3.zero;
+        if (_weaponLeftGrab != null)
+        {
+            leftGrabLocal = visual.transform.InverseTransformPoint(
+                _weaponLeftGrab.position
+            );
+        }
         _weaponGripLocalPosition = Vector3.zero;
         _weaponGripLocalRotation = Quaternion.identity;
         if (_weaponRightGrab != null)
@@ -754,6 +762,17 @@ internal sealed class RemoteAvatar
         EnsureWeaponIk();
 
         _weaponMuzzle = FindWeaponMuzzle(visual.transform, _weaponMuzzlePath);
+        _weaponBarrelLocalDirection = Vector3.forward;
+        if (_weaponMuzzle != null)
+        {
+            Vector3 barrel = visual.transform.InverseTransformDirection(
+                _weaponMuzzle.position - visual.transform.position
+            );
+            if (barrel.sqrMagnitude > 0.0001f)
+            {
+                _weaponBarrelLocalDirection = barrel.normalized;
+            }
+        }
         _weaponFlash = null;
         _weaponAnimator = null;
         foreach (Animator animator in visual.GetComponentsInChildren<Animator>(true))
@@ -787,6 +806,10 @@ internal sealed class RemoteAvatar
             $"anchor={(useHandAnchor ? "hand" : "path")} " +
             $"rightGrab={(_weaponRightGrab != null ? _weaponRightGrab.name : "<none>")} " +
             $"leftGrab={(_weaponLeftGrab != null ? _weaponLeftGrab.name : "<none>")} " +
+            $"rightGrabPath='{_weaponRightGrabPath}' " +
+            $"leftGrabPath='{_weaponLeftGrabPath}' " +
+            $"leftGrabLocal={leftGrabLocal} " +
+            $"grabDistance={(_weaponRightGrab != null && _weaponLeftGrab != null ? Vector3.Distance(_weaponRightGrab.position, _weaponLeftGrab.position) : -1.0f):F3} " +
             $"oneHanded={_weaponOneHanded} " +
             $"handGrip={_weaponHandGripLocalPosition} " +
             $"handGripRot={_weaponHandGripLocalRotation.eulerAngles} " +
@@ -799,6 +822,7 @@ internal sealed class RemoteAvatar
             $"weaponWorld={_weaponVisual.transform.position} " +
             $"handWorld={(hand != null ? hand.position : Vector3.zero)} " +
             $"muzzle={(_weaponMuzzle != null ? _weaponMuzzle.name : "<none>")} " +
+            $"barrelLocal={_weaponBarrelLocalDirection} " +
             $"animator={(_weaponAnimator != null ? _weaponAnimator.name : "<none>")}."
         );
     }
@@ -1249,9 +1273,19 @@ internal sealed class RemoteAvatar
                         chestBone.Bone != null
             ? chestBone.Bone.position
             : Root.transform.position + Vector3.up * 0.75f;
+
+        // Follow the real barrel direction, not only the body yaw. This is what
+        // moves the hands and the weapon up and down when the sender aims.
+        Quaternion aimRotation = Root.transform.rotation * _weaponRootRotation;
+        Vector3 aimDirection = aimRotation * _weaponBarrelLocalDirection;
+        if (aimDirection.sqrMagnitude < 0.0001f)
+        {
+            aimDirection = Root.transform.forward;
+        }
+
         Vector3 target = chest +
-                         Root.transform.forward * 0.45f +
-                         Root.transform.right * 0.10f;
+                         aimDirection.normalized * 0.45f +
+                         Root.transform.right * 0.07f;
 
         float reach = (lower.Bone.position - upper.Bone.position).magnitude +
                       (hand.Bone.position - lower.Bone.position).magnitude;

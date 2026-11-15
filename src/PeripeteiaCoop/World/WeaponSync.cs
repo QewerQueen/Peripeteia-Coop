@@ -416,6 +416,15 @@ internal static class WeaponSync
                 string heldName = shoot != null && shoot.currentlyHeld != null
                     ? shoot.currentlyHeld.name
                     : "<null>";
+                Vector3 leftGrabWorld = attachedGun.LeftGrab != null
+                    ? attachedGun.LeftGrab.position
+                    : Vector3.zero;
+                float grabDistance = attachedGun.LeftGrab != null
+                    ? Vector3.Distance(
+                        attachedGun.RightGrab.position,
+                        attachedGun.LeftGrab.position
+                    )
+                    : -1.0f;
                 CoopPlugin.LogSource.LogInfo(
                     $"[weapon] grip diagnostic item='{itemName}' held='{heldName}' " +
                     $"hand='{rightHand.name}' grab='{attachedGun.RightGrab.name}' " +
@@ -424,6 +433,9 @@ internal static class WeaponSync
                     $"handGripRot={handGripLocalRotation.eulerAngles} " +
                     $"handWorld={rightHand.position} " +
                     $"grabWorld={attachedGun.RightGrab.position} " +
+                    $"leftGrab={(attachedGun.LeftGrab != null ? attachedGun.LeftGrab.name : "<none>")} " +
+                    $"leftWorld={leftGrabWorld} grabDistance={grabDistance:F3} " +
+                    $"rightGrabPath='{rightGrabPath}' leftGrabPath='{leftGrabPath}' " +
                     $"handUp={rightHand.up} handForward={rightHand.forward} " +
                     $"parent='{parentPath}'."
                 );

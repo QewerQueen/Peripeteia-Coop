@@ -18,6 +18,7 @@ public sealed class RemoteWeaponIK : MonoBehaviour
     private bool _targetActive;
     private bool _loggedCallback;
     private bool _loggedActive;
+    private bool _loggedTarget;
 
     public void Configure(Animator animator, Vector3 handRotationMod)
     {
@@ -79,6 +80,21 @@ public sealed class RemoteWeaponIK : MonoBehaviour
         }
 
         Transform grab = _leftGrab!;
+        if (!_loggedTarget)
+        {
+            _loggedTarget = true;
+            Transform? leftHand = _animator.GetBoneTransform(HumanBodyBones.LeftHand);
+            Vector3 handPosition = leftHand != null
+                ? leftHand.position
+                : Vector3.zero;
+            CoopPlugin.LogSource.LogInfo(
+                $"[avatar] weapon IK target='{grab.name}' " +
+                $"leftHand={handPosition} grab={grab.position} " +
+                $"distance={Vector3.Distance(handPosition, grab.position):F3} " +
+                $"weight={_weight:F2}."
+            );
+        }
+
         _animator.SetIKPositionWeight(AvatarIKGoal.LeftHand, _weight);
         _animator.SetIKRotationWeight(AvatarIKGoal.LeftHand, _weight);
         _animator.SetIKPosition(AvatarIKGoal.LeftHand, grab.position);
