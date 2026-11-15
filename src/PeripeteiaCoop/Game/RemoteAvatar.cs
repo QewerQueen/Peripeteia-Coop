@@ -947,7 +947,7 @@ internal sealed class RemoteAvatar
             ? visual.transform.InverseTransformVector(weaponBounds.size)
             : Vector3.zero;
         _weaponBoundsCenterLocal = boundsCenterLocal;
-        _weaponProbeUntil = Time.unscaledTime + 30.0f;
+        _weaponProbeUntil = Time.unscaledTime + 60.0f;
         _nextWeaponProbeTime = 0.0f;
 
         CoopPlugin.LogSource.LogInfo(
