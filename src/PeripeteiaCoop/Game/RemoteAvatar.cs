@@ -54,8 +54,17 @@ internal sealed class RemoteAvatar
     private Vector3 _weaponLocalPosition;
     private Quaternion _weaponLocalRotation = Quaternion.identity;
     private Vector3 _weaponLocalScale = Vector3.one;
+    private Quaternion _weaponRootRotation = Quaternion.identity;
+    private bool _weaponUseHandAnchor;
+    private Transform? _weaponHand;
     private Transform? _weaponRightGrab;
     private Transform? _weaponLeftGrab;
+    private Vector3 _weaponGripLocalPosition;
+    private Quaternion _weaponGripLocalRotation = Quaternion.identity;
+    private Vector3 _weaponHandGripLocalPosition;
+    private Quaternion _weaponHandGripLocalRotation = Quaternion.identity;
+    private bool _weaponHasHandGrip;
+    private bool _weaponPlacementLogged;
     private string _weaponRightGrabPath = string.Empty;
     private string _weaponLeftGrabPath = string.Empty;
     private bool _weaponOneHanded;
@@ -290,8 +299,10 @@ internal sealed class RemoteAvatar
             _weaponMuzzle = null;
             _weaponFlash = null;
             _weaponAnimator = null;
+            _weaponHand = null;
             _weaponRightGrab = null;
             _weaponLeftGrab = null;
+            _weaponHasHandGrip = false;
             _weaponIk = null;
             _nextWeaponBuildTime = 0.0f;
             if (_weaponVisible)
@@ -379,6 +390,7 @@ internal sealed class RemoteAvatar
         {
             _weaponDescriptor = string.Empty;
             _weaponItemName = string.Empty;
+            _weaponHasHandGrip = false;
             DestroyWeaponVisual();
             return;
         }
@@ -399,6 +411,10 @@ internal sealed class RemoteAvatar
         _weaponLocalPosition = snapshot.LocalPosition;
         _weaponLocalRotation = snapshot.LocalRotation;
         _weaponLocalScale = snapshot.LocalScale;
+        _weaponRootRotation = snapshot.RootRotation;
+        _weaponHandGripLocalPosition = snapshot.HandGripLocalPosition;
+        _weaponHandGripLocalRotation = snapshot.HandGripLocalRotation;
+        _weaponHasHandGrip = snapshot.HasHandGrip;
         _weaponRightGrabPath = snapshot.RightGrabPath;
         _weaponLeftGrabPath = snapshot.LeftGrabPath;
         _weaponOneHanded = snapshot.OneHanded;
@@ -416,6 +432,13 @@ internal sealed class RemoteAvatar
         if (_weaponVisual == null || descriptorChanged)
         {
             TryBuildWeaponVisual();
+
+            // Building the visual destroys the previous one, which clears the
+            // hand-grip state. Restore the values from this packet before the
+            // transform is applied.
+            _weaponHandGripLocalPosition = snapshot.HandGripLocalPosition;
+            _weaponHandGripLocalRotation = snapshot.HandGripLocalRotation;
+            _weaponHasHandGrip = snapshot.HasHandGrip;
         }
 
         _weaponIk?.SetHandRotationMod(_weaponHandRotationMod);
@@ -592,6 +615,7 @@ internal sealed class RemoteAvatar
             TryBuildWeaponVisual();
         }
 
+        ApplyWeaponHandRotation();
         ApplyWeaponTransform();
 
         if (_weaponAnimator != null && _weaponAnimatorActive)
@@ -700,19 +724,32 @@ internal sealed class RemoteAvatar
             ClearSlotChildren(parent);
         }
 
+        _weaponPlacementLogged = false;
         visual.transform.SetParent(parent, false);
         _weaponVisual = visual;
-        // The sender sends the weapon's real local transform relative to the
-        // same skeleton bone. Applying it verbatim copies the game's own
-        // attachment, including the grip position inside the palm. The config
-        // offset is only a final nudge and defaults to zero.
-        _weaponVisual.transform.localPosition =
-            _weaponLocalPosition + GetWeaponGripNudge();
+        _weaponHand = useHandAnchor ? hand : null;
+        _weaponUseHandAnchor = useHandAnchor;
+        _weaponVisual.transform.localPosition = _weaponLocalPosition;
         _weaponVisual.transform.localRotation = _weaponLocalRotation;
         _weaponVisual.transform.localScale = _weaponLocalScale;
 
         _weaponRightGrab = FindGrabPoint(visual.transform, _weaponRightGrabPath, true);
         _weaponLeftGrab = FindGrabPoint(visual.transform, _weaponLeftGrabPath, false);
+        _weaponGripLocalPosition = Vector3.zero;
+        _weaponGripLocalRotation = Quaternion.identity;
+        if (_weaponRightGrab != null)
+        {
+            // The game's weapon root is usually parented to WeaponLocation, not
+            // to the hand, so its localPosition is not the hand attachment. The
+            // real grip point is stored on the weapon itself; its local offset
+            // is what we need to put the grip into the remote palm.
+            _weaponGripLocalPosition = visual.transform.InverseTransformPoint(
+                _weaponRightGrab.position
+            );
+            _weaponGripLocalRotation =
+                Quaternion.Inverse(visual.transform.rotation) *
+                _weaponRightGrab.rotation;
+        }
 
         EnsureWeaponIk();
 
@@ -751,6 +788,11 @@ internal sealed class RemoteAvatar
             $"rightGrab={(_weaponRightGrab != null ? _weaponRightGrab.name : "<none>")} " +
             $"leftGrab={(_weaponLeftGrab != null ? _weaponLeftGrab.name : "<none>")} " +
             $"oneHanded={_weaponOneHanded} " +
+            $"handGrip={_weaponHandGripLocalPosition} " +
+            $"handGripRot={_weaponHandGripLocalRotation.eulerAngles} " +
+            $"hasHandGrip={_weaponHasHandGrip} " +
+            $"gripLocal={_weaponGripLocalPosition} " +
+            $"gripLocalRot={_weaponGripLocalRotation.eulerAngles} " +
             $"localPos={_weaponLocalPosition} localRot={_weaponLocalRotation.eulerAngles} " +
             $"gripDown={CoopPlugin.WeaponGripDown:F3} " +
             $"gripForward={CoopPlugin.WeaponGripForward:F3} " +
@@ -799,13 +841,84 @@ internal sealed class RemoteAvatar
 
     private static Vector3 GetWeaponGripNudge()
     {
-        // The exact attachment comes from the sender. These two values are only
-        // a final manual nudge in the hand's local space and default to zero.
+        // Optional manual nudge in the hand's local space. Defaults to zero:
+        // the exact palm position comes from the sender's real GrabPoint.
         return new Vector3(
             0.0f,
             -CoopPlugin.WeaponGripDown,
             CoopPlugin.WeaponGripForward
         );
+    }
+
+    private void ApplyWeaponHandRotation()
+    {
+        if (!_weaponUseHandAnchor ||
+            _weaponHand == null ||
+            Root == null ||
+            !_weaponHasHandGrip ||
+            _weaponHoldWeight < 0.35f)
+        {
+            return;
+        }
+
+        float gripLength = _weaponHandGripLocalPosition.magnitude;
+        if (gripLength < 0.002f || gripLength > 0.12f)
+        {
+            return;
+        }
+
+        // The sender sends the real hand-to-GrabPoint rotation. Apply it so the
+        // remote wrist wraps the grip in the same way as the original IK.
+        Quaternion weaponRotation = Root.transform.rotation * _weaponRootRotation;
+        Quaternion gripWorldRotation = weaponRotation * _weaponGripLocalRotation;
+        Quaternion handRotation =
+            gripWorldRotation * Quaternion.Inverse(_weaponHandGripLocalRotation);
+        _weaponHand.rotation = Quaternion.Slerp(
+            _weaponHand.rotation,
+            handRotation,
+            Mathf.Clamp01(_weaponHoldWeight)
+        );
+    }
+
+    private static Vector3 GetFallbackHandGrip(Transform hand)
+    {
+        // If the rig has finger bones, their base gives us the real palm
+        // direction instead of guessing the hand bone's local axis.
+        for (int index = 0; index < hand.childCount; index++)
+        {
+            Transform child = hand.GetChild(index);
+            if (child == null)
+            {
+                continue;
+            }
+
+            string name = child.name.ToLowerInvariant();
+            if (!name.Contains("index") &&
+                !name.Contains("middle") &&
+                !name.Contains("ring") &&
+                !name.Contains("pinky") &&
+                !name.Contains("thumb") &&
+                !name.Contains("finger"))
+            {
+                continue;
+            }
+
+            Vector3 local = hand.InverseTransformPoint(child.position);
+            float length = local.magnitude;
+            if (length > 0.002f && length < 0.15f)
+            {
+                // Use the real finger direction, but keep the distance
+                // configurable so it can be tuned without a rebuild.
+                return local.normalized * Mathf.Clamp(
+                    CoopPlugin.WeaponPalmOffset,
+                    0.005f,
+                    0.08f
+                );
+            }
+        }
+
+        // Unity humanoid hand bones point along local Y toward the fingers.
+        return new Vector3(0.0f, CoopPlugin.WeaponPalmOffset, 0.0f);
     }
 
     private void ApplyWeaponTransform()
@@ -816,9 +929,65 @@ internal sealed class RemoteAvatar
         }
 
         Transform weapon = _weaponVisual.transform;
-        weapon.localPosition = _weaponLocalPosition + GetWeaponGripNudge();
-        weapon.localRotation = _weaponLocalRotation;
         weapon.localScale = _weaponLocalScale;
+
+        if (!_weaponUseHandAnchor || _weaponHand == null || Root == null)
+        {
+            // No hand bone: keep the sender's parent-relative transform.
+            weapon.localPosition = _weaponLocalPosition;
+            weapon.localRotation = _weaponLocalRotation;
+            return;
+        }
+
+        // The sender's real hand-to-grip offset is the best source. Guard it:
+        // rightHandObj on some rigs points at the GrabPoint itself (zero
+        // offset) or at a first-person helper far from the body hand. In those
+        // cases use the palm direction along the hand bone instead.
+        Vector3 handGrip = _weaponHandGripLocalPosition;
+        float handGripLength = handGrip.magnitude;
+        bool usedFallbackGrip = false;
+        if (!_weaponHasHandGrip || handGripLength < 0.002f || handGripLength > 0.12f)
+        {
+            handGrip = GetFallbackHandGrip(_weaponHand);
+            usedFallbackGrip = true;
+        }
+
+        Vector3 palmPosition = _weaponHand.TransformPoint(
+            handGrip + GetWeaponGripNudge()
+        );
+
+        // Keep the weapon's real world orientation from the sender, so the
+        // muzzle follows the camera aim even though the clone is third-person.
+        Quaternion weaponRotation = Root.transform.rotation * _weaponRootRotation;
+        Vector3 gripOffset = Vector3.zero;
+        if (_weaponRightGrab != null)
+        {
+            // Align the real GrabPoint, not the weapon root, with the palm.
+            gripOffset =
+                weaponRotation *
+                Vector3.Scale(_weaponGripLocalPosition, weapon.lossyScale);
+        }
+
+        weapon.rotation = weaponRotation;
+        weapon.position = palmPosition - gripOffset;
+
+        if (!_weaponPlacementLogged)
+        {
+            _weaponPlacementLogged = true;
+            Vector3 gripWorld = _weaponRightGrab != null
+                ? _weaponRightGrab.position
+                : weapon.position;
+            CoopPlugin.LogSource.LogInfo(
+                $"[avatar] id={Id} weapon placed '{_weaponItemName}' " +
+                $"fallbackGrip={usedFallbackGrip} handGrip={handGrip} " +
+                $"hand={_weaponHand.position} palm={palmPosition} " +
+                $"grip={gripWorld} weapon={weapon.position} " +
+                $"handToGrip={Vector3.Distance(_weaponHand.position, gripWorld):F3} " +
+                $"handToPalm={Vector3.Distance(_weaponHand.position, palmPosition):F3} " +
+                $"weaponRot={weapon.rotation.eulerAngles} " +
+                $"handRot={_weaponHand.rotation.eulerAngles}."
+            );
+        }
     }
 
     private void DestroyWeaponVisual()
@@ -832,6 +1001,7 @@ internal sealed class RemoteAvatar
         _weaponMuzzle = null;
         _weaponFlash = null;
         _weaponAnimator = null;
+        _weaponHand = null;
         _weaponRightGrab = null;
         _weaponLeftGrab = null;
         _weaponIk?.Clear();

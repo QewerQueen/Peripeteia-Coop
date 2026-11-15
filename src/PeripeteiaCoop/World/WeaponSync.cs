@@ -31,6 +31,7 @@ internal static class WeaponSync
     private static float _nextShotNotify;
     private static bool _lastVisible;
     private static string _lastDescriptor = string.Empty;
+    private static string _lastGripDiagnostic = string.Empty;
 
     public static void Tick(PlayerMovement? localPlayer)
     {
@@ -275,6 +276,46 @@ internal static class WeaponSync
                lower.Contains("inspect");
     }
 
+    private static Transform? FindRightHand(
+        PlayerMovement localPlayer,
+        PlayerShootScript? shoot
+    )
+    {
+        try
+        {
+            Animator? animator = FindBodyAnimator(localPlayer);
+            if (animator != null && animator.isHuman)
+            {
+                Transform? bone = animator.GetBoneTransform(HumanBodyBones.RightHand);
+                if (bone != null)
+                {
+                    return bone;
+                }
+            }
+        }
+        catch
+        {
+            // Fall through to the IK target and name-based search.
+        }
+
+        if (shoot != null && shoot.attachedIK != null && shoot.attachedIK.rightHandObj != null)
+        {
+            return shoot.attachedIK.rightHandObj;
+        }
+
+        foreach (Transform child in localPlayer.GetComponentsInChildren<Transform>(true))
+        {
+            if (child != null &&
+                (string.Equals(child.name, "Hand.R", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(child.name, "RightHand", StringComparison.OrdinalIgnoreCase)))
+            {
+                return child;
+            }
+        }
+
+        return null;
+    }
+
     private static bool TryCapture(PlayerMovement localPlayer, out WeaponSnapshot snapshot)
     {
         snapshot = default;
@@ -340,6 +381,55 @@ internal static class WeaponSync
             handRotationMod = shoot.attachedIK.handRotationMod;
         }
 
+        bool hasHandGrip = false;
+        Vector3 handGripLocalPosition = Vector3.zero;
+        Quaternion handGripLocalRotation = Quaternion.identity;
+        Shoot? attachedGun = shoot != null ? shoot.AttachedGun : null;
+        Transform? rightHand = FindRightHand(localPlayer, shoot);
+        if (rightHand != null && attachedGun != null && attachedGun.RightGrab != null)
+        {
+            try
+            {
+                handGripLocalPosition = rightHand.InverseTransformPoint(
+                    attachedGun.RightGrab.position
+                );
+                handGripLocalRotation =
+                    Quaternion.Inverse(rightHand.rotation) * attachedGun.RightGrab.rotation;
+                hasHandGrip = true;
+            }
+            catch
+            {
+                hasHandGrip = false;
+            }
+        }
+
+        if (hasHandGrip &&
+            rightHand != null &&
+            attachedGun != null &&
+            attachedGun.RightGrab != null)
+        {
+            string gripKey =
+                itemName + "|" + rightHand.name + "|" + attachedGun.RightGrab.name;
+            if (!string.Equals(gripKey, _lastGripDiagnostic, StringComparison.Ordinal))
+            {
+                _lastGripDiagnostic = gripKey;
+                string heldName = shoot != null && shoot.currentlyHeld != null
+                    ? shoot.currentlyHeld.name
+                    : "<null>";
+                CoopPlugin.LogSource.LogInfo(
+                    $"[weapon] grip diagnostic item='{itemName}' held='{heldName}' " +
+                    $"hand='{rightHand.name}' grab='{attachedGun.RightGrab.name}' " +
+                    $"grabLocal={attachedGun.RightGrab.localPosition} " +
+                    $"handGrip={handGripLocalPosition} " +
+                    $"handGripRot={handGripLocalRotation.eulerAngles} " +
+                    $"handWorld={rightHand.position} " +
+                    $"grabWorld={attachedGun.RightGrab.position} " +
+                    $"handUp={rightHand.up} handForward={rightHand.forward} " +
+                    $"parent='{parentPath}'."
+                );
+            }
+        }
+
         Animator? weaponAnimator = FindWeaponAnimator(weapon);
         int animatorHash = 0;
         float animatorTime = 0.0f;
@@ -371,6 +461,9 @@ internal static class WeaponSync
             weapon.localRotation,
             weapon.localScale,
             Quaternion.Inverse(localPlayer.transform.rotation) * weapon.rotation,
+            hasHandGrip,
+            handGripLocalPosition,
+            handGripLocalRotation,
             rightGrabPath,
             leftGrabPath,
             oneHanded,
@@ -700,6 +793,9 @@ internal readonly struct WeaponSnapshot
         Quaternion localRotation,
         Vector3 localScale,
         Quaternion rootRotation,
+        bool hasHandGrip,
+        Vector3 handGripLocalPosition,
+        Quaternion handGripLocalRotation,
         string rightGrabPath,
         string leftGrabPath,
         bool oneHanded,
@@ -721,6 +817,9 @@ internal readonly struct WeaponSnapshot
         LocalRotation = localRotation;
         LocalScale = localScale;
         RootRotation = rootRotation;
+        HasHandGrip = hasHandGrip;
+        HandGripLocalPosition = handGripLocalPosition;
+        HandGripLocalRotation = handGripLocalRotation;
         RightGrabPath = rightGrabPath;
         LeftGrabPath = leftGrabPath;
         OneHanded = oneHanded;
@@ -757,6 +856,12 @@ internal readonly struct WeaponSnapshot
     /// body, so the remote side uses this world-aim rotation instead.
     /// </summary>
     public Quaternion RootRotation { get; }
+
+    public bool HasHandGrip { get; }
+
+    public Vector3 HandGripLocalPosition { get; }
+
+    public Quaternion HandGripLocalRotation { get; }
 
     public string RightGrabPath { get; }
 

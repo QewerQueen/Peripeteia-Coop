@@ -545,6 +545,14 @@ internal sealed class CoopNetwork : IDisposable
         writer.Put(snapshot.RootRotation.y);
         writer.Put(snapshot.RootRotation.z);
         writer.Put(snapshot.RootRotation.w);
+        writer.Put(snapshot.HasHandGrip);
+        writer.Put(snapshot.HandGripLocalPosition.x);
+        writer.Put(snapshot.HandGripLocalPosition.y);
+        writer.Put(snapshot.HandGripLocalPosition.z);
+        writer.Put(snapshot.HandGripLocalRotation.x);
+        writer.Put(snapshot.HandGripLocalRotation.y);
+        writer.Put(snapshot.HandGripLocalRotation.z);
+        writer.Put(snapshot.HandGripLocalRotation.w);
         writer.Put(snapshot.RightGrabPath ?? string.Empty);
         writer.Put(snapshot.LeftGrabPath ?? string.Empty);
         writer.Put(snapshot.OneHanded);
@@ -579,6 +587,18 @@ internal sealed class CoopNetwork : IDisposable
             reader.GetFloat(),
             reader.GetFloat()
         );
+        bool hasHandGrip = reader.GetBool();
+        var handGripLocalPosition = new Vector3(
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat()
+        );
+        var handGripLocalRotation = new Quaternion(
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat()
+        );
         string rightGrabPath = reader.GetString();
         string leftGrabPath = reader.GetString();
         bool oneHanded = reader.GetBool();
@@ -603,6 +623,9 @@ internal sealed class CoopNetwork : IDisposable
             rotation,
             scale,
             rootRotation,
+            hasHandGrip,
+            handGripLocalPosition,
+            handGripLocalRotation,
             rightGrabPath,
             leftGrabPath,
             oneHanded,

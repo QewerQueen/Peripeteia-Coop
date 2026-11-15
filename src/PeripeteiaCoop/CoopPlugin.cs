@@ -34,6 +34,8 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static float WeaponGripForward { get; private set; }
 
+    internal static float WeaponPalmOffset { get; private set; } = 0.03f;
+
     internal static CoopSettings Settings { get; private set; } = null!;
 
     internal static CoopNetwork? Network { get; private set; }
@@ -88,6 +90,13 @@ public sealed class CoopPlugin : BasePlugin
             "GripForward",
             0.0f,
             "Optional fine-tune: move the remote weapon toward the fingers in the hand's local space, in meters. Leave at 0 to copy the sender exactly."
+        ).Value;
+
+        WeaponPalmOffset = Config.Bind(
+            "Weapon",
+            "PalmOffset",
+            0.03f,
+            "Fallback distance from the wrist to the palm along the hand bone, in meters. Used when the real hand-grip offset is unavailable. 0.02-0.05 is normal."
         ).Value;
 
         Settings = CoopSettings.Parse(Environment.GetCommandLineArgs());
