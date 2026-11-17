@@ -29,6 +29,11 @@ internal sealed class CoopNetwork : IDisposable
         ItemState = 5,
         WeaponState = 6,
         WeaponEvent = 7,
+        Damage = 8,
+        ItemEvent = 9,
+        EnemyState = 10,
+        EnemyDeath = 11,
+        StoryEvent = 12,
     }
 
     [Flags]
@@ -44,7 +49,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 11;
+    private const int ProtocolVersion = 15;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
 
@@ -85,6 +90,34 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     public int ConnectedPeersCount => _net.ConnectedPeersCount;
+
+    /// <summary>Co-op id of this instance (host = 0).</summary>
+    public int LocalId => _localId;
+
+    /// <summary>The local player, once the game has spawned it.</summary>
+    public PlayerMovement? LocalPlayer => _localPlayer;
+
+    /// <summary>Root transform of a remote player, or null when it is not spawned.</summary>
+    public Transform? GetAvatarRoot(int id)
+    {
+        if (_avatars.TryGetValue(id, out RemoteAvatar? avatar) &&
+            avatar != null &&
+            avatar.Root != null)
+        {
+            return avatar.Root.transform;
+        }
+
+        return null;
+    }
+
+    /// <summary>Ids of every remote player currently spawned on this machine.</summary>
+    public IEnumerable<int> RemotePlayerIds()
+    {
+        foreach (int id in _avatars.Keys)
+        {
+            yield return id;
+        }
+    }
 
     public CoopNetwork(CoopSettings settings)
     {
@@ -157,6 +190,10 @@ internal sealed class CoopNetwork : IDisposable
         DoorSync.Tick();
         ItemSync.Tick(localPlayer != null ? localPlayer.transform : null);
         WeaponSync.Tick(localPlayer);
+        CombatSync.Tick(localPlayer);
+        EnemySync.Tick(localPlayer);
+        AiTargeting.Tick(localPlayer);
+        StorySync.Tick(localPlayer);
 
         string localScene = localPlayer != null ? localPlayer.gameObject.scene.name : string.Empty;
         bool localReady = IsLocalPlayerReady(localPlayer);
@@ -240,6 +277,14 @@ internal sealed class CoopNetwork : IDisposable
                 $"[net] role={_settings.Role} peers={_net.ConnectedPeersCount} avatars={_avatars.Count} " +
                 $"sent={_poseSent} received={_poseReceived} poses:{poses}"
             );
+
+            if (_settings.Role != CoopRole.Offline)
+            {
+                CoopPlugin.LogSource.LogInfo(
+                    $"[sync] enemies mirrored={EnemySync.MirrorsSent} deaths={EnemySync.DeathsSent}/{EnemySync.DeathsApplied} " +
+                    $"aiTargets={AiTargeting.RegisteredCount} story={StorySync.EventsSent}/{StorySync.EventsApplied}"
+                );
+            }
         }
     }
 
@@ -479,6 +524,205 @@ internal sealed class CoopNetwork : IDisposable
         writer.Put(rotation.w);
     }
 
+    /// <summary>
+    /// Immediate, reliable pickup/drop notification. The polling channel still
+    /// carries the transforms; this event makes a share instant and carries the
+    /// item identity so a peer that never saw the object can spawn it.
+    /// </summary>
+    public void SendItemEvent(
+        string key,
+        byte kind,
+        Vector3 position,
+        Quaternion rotation,
+        string itemName,
+        string templateName
+    )
+    {
+        if (_net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        WriteItemEvent(writer, key, kind, position, rotation, itemName, templateName);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    private static void WriteItemEvent(
+        NetDataWriter writer,
+        string key,
+        byte kind,
+        Vector3 position,
+        Quaternion rotation,
+        string itemName,
+        string templateName
+    )
+    {
+        writer.Put((byte)PacketType.ItemEvent);
+        writer.Put(key);
+        writer.Put(kind);
+        writer.Put(position.x);
+        writer.Put(position.y);
+        writer.Put(position.z);
+        writer.Put(rotation.x);
+        writer.Put(rotation.y);
+        writer.Put(rotation.z);
+        writer.Put(rotation.w);
+        writer.Put(itemName ?? string.Empty);
+        writer.Put(templateName ?? string.Empty);
+    }
+
+    /// <summary>
+    /// Host-only: broadcasts the authoritative state of one enemy/NPC so clients
+    /// can mirror it. Sequenced (not reliable) because a newer snapshot replaces
+    /// an older one anyway.
+    /// </summary>
+    public void SendEnemyState(
+        string key,
+        Vector3 position,
+        Quaternion rotation,
+        int hp,
+        int maxHp,
+        int stateHash,
+        float normalizedTime,
+        float speed
+    )
+    {
+        if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.EnemyState);
+        writer.Put(key);
+        writer.Put(position.x);
+        writer.Put(position.y);
+        writer.Put(position.z);
+        writer.Put(rotation.x);
+        writer.Put(rotation.y);
+        writer.Put(rotation.z);
+        writer.Put(rotation.w);
+        writer.Put(hp);
+        writer.Put(maxHp);
+        writer.Put(stateHash);
+        writer.Put(normalizedTime);
+        writer.Put(speed);
+        _net.SendToAll(writer, DeliveryMethod.Sequenced);
+    }
+
+    /// <summary>
+    /// Reports that an enemy died. Both directions are allowed: either player can
+    /// land the killing blow, and the host relays a client's report to the others.
+    /// </summary>
+    public void SendEnemyDeath(string key)
+    {
+        if (_net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.EnemyDeath);
+        writer.Put(key);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>
+    /// Reliable story event: a consumed dialogue/quest object or a scripted
+    /// teleport, together with any world GameObjects that must be switched on the
+    /// other side. Both directions are allowed; the host relays between clients.
+    /// </summary>
+    public void SendStoryEvent(
+        string key,
+        byte kind,
+        Vector3 point,
+        string[] objectKeys,
+        bool[] objectStates
+    )
+    {
+        SendStoryEvent(key, kind, point, string.Empty, 0, objectKeys, objectStates);
+    }
+
+    public void SendStoryEvent(
+        string key,
+        byte kind,
+        Vector3 point,
+        string text,
+        int number,
+        string[] objectKeys,
+        bool[] objectStates
+    )
+    {
+        if (_net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        WriteStoryEvent(writer, key, kind, point, text, number, objectKeys, objectStates);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    private static void WriteStoryEvent(
+        NetDataWriter writer,
+        string key,
+        byte kind,
+        Vector3 point,
+        string text,
+        int number,
+        string[] objectKeys,
+        bool[] objectStates
+    )
+    {
+        writer.Put((byte)PacketType.StoryEvent);
+        writer.Put(key ?? string.Empty);
+        writer.Put(kind);
+        writer.Put(point.x);
+        writer.Put(point.y);
+        writer.Put(point.z);
+        writer.Put(text ?? string.Empty);
+        writer.Put(number);
+
+        if (objectKeys == null || objectStates == null)
+        {
+            writer.Put(0);
+            return;
+        }
+
+        int count = Mathf.Min(objectKeys.Length, objectStates.Length);
+        writer.Put(count);
+        for (int i = 0; i < count; i++)
+        {
+            writer.Put(objectKeys[i] ?? string.Empty);
+            writer.Put(objectStates[i]);
+        }
+    }
+
     public void SendWeaponState(WeaponSnapshot snapshot)
     {
         if (_net.ConnectedPeersCount == 0)
@@ -519,6 +763,64 @@ internal sealed class CoopNetwork : IDisposable
 
         NetPeer? host = _net.FirstPeer;
         host?.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>
+    /// Reports a bullet hit on another player. The victim applies the damage on
+    /// its own machine through the game's real HealthScript, so the shooter
+    /// never mutates remote health directly.
+    /// </summary>
+    public void SendDamage(int targetId, int amount, bool headshot, Vector3 point)
+    {
+        if (_net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        WriteDamage(writer, targetId, _localId, amount, headshot, point);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            NetPeer? target = FindPeer(targetId);
+            target?.Send(writer, DeliveryMethod.ReliableOrdered);
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    private static void WriteDamage(
+        NetDataWriter writer,
+        int targetId,
+        int dealerId,
+        int amount,
+        bool headshot,
+        Vector3 point
+    )
+    {
+        writer.Put((byte)PacketType.Damage);
+        writer.Put(targetId);
+        writer.Put(dealerId);
+        writer.Put(amount);
+        writer.Put(headshot);
+        writer.Put(point.x);
+        writer.Put(point.y);
+        writer.Put(point.z);
+    }
+
+    private NetPeer? FindPeer(int id)
+    {
+        foreach (KeyValuePair<NetPeer, int> pair in _peerIds)
+        {
+            if (pair.Value == id)
+            {
+                return pair.Key;
+            }
+        }
+
+        return null;
     }
 
     private static void WriteWeaponState(NetDataWriter writer, int senderId, WeaponSnapshot snapshot)
@@ -903,7 +1205,12 @@ internal sealed class CoopNetwork : IDisposable
             type != PacketType.DoorState &&
             type != PacketType.ItemState &&
             type != PacketType.WeaponState &&
-            type != PacketType.WeaponEvent)
+            type != PacketType.WeaponEvent &&
+            type != PacketType.Damage &&
+            type != PacketType.ItemEvent &&
+            type != PacketType.EnemyState &&
+            type != PacketType.EnemyDeath &&
+            type != PacketType.StoryEvent)
         {
             CoopPlugin.LogSource.LogInfo($"[net] Received {type} from {peer.Address}:{peer.Port}.");
         }
@@ -936,6 +1243,26 @@ internal sealed class CoopNetwork : IDisposable
 
             case PacketType.WeaponEvent:
                 ReceiveWeaponEvent(peer, reader);
+                break;
+
+            case PacketType.Damage:
+                ReceiveDamage(peer, reader);
+                break;
+
+            case PacketType.ItemEvent:
+                ReceiveItemEvent(peer, reader);
+                break;
+
+            case PacketType.EnemyState:
+                ReceiveEnemyState(peer, reader);
+                break;
+
+            case PacketType.EnemyDeath:
+                ReceiveEnemyDeath(peer, reader);
+                break;
+
+            case PacketType.StoryEvent:
+                ReceiveStoryEvent(peer, reader);
                 break;
         }
     }
@@ -1175,6 +1502,127 @@ internal sealed class CoopNetwork : IDisposable
         }
     }
 
+    private void ReceiveStoryEvent(NetPeer peer, NetDataReader reader)
+    {
+        string key = reader.GetString();
+        byte kind = reader.GetByte();
+        var point = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+        string text = reader.GetString();
+        int number = reader.GetInt();
+        int count = reader.GetInt();
+        if (count < 0)
+        {
+            count = 0;
+        }
+
+        var objectKeys = new string[count];
+        var objectStates = new bool[count];
+        for (int i = 0; i < count; i++)
+        {
+            objectKeys[i] = reader.GetString();
+            objectStates[i] = reader.GetBool();
+        }
+
+        StorySync.ApplyEvent(key, kind, point, text, number, objectKeys, objectStates);
+
+        if (_settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        var relay = new NetDataWriter();
+        WriteStoryEvent(relay, key, kind, point, text, number, objectKeys, objectStates);
+        foreach (NetPeer other in _net.ConnectedPeerList)
+        {
+            if (other != peer)
+            {
+                other.Send(relay, DeliveryMethod.ReliableOrdered);
+            }
+        }
+    }
+
+    private void ReceiveEnemyState(NetPeer peer, NetDataReader reader)
+    {
+        string key = reader.GetString();
+        var position = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+        var rotation = new Quaternion(
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat()
+        );
+        int hp = reader.GetInt();
+        int maxHp = reader.GetInt();
+        int stateHash = reader.GetInt();
+        float normalizedTime = reader.GetFloat();
+        float speed = reader.GetFloat();
+
+        EnemySync.ApplyState(
+            key,
+            position,
+            rotation,
+            hp,
+            maxHp,
+            stateHash,
+            normalizedTime,
+            speed
+        );
+    }
+
+    private void ReceiveEnemyDeath(NetPeer peer, NetDataReader reader)
+    {
+        string key = reader.GetString();
+        EnemySync.ApplyDeath(key);
+
+        if (_settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        var relay = new NetDataWriter();
+        relay.Put((byte)PacketType.EnemyDeath);
+        relay.Put(key);
+        foreach (NetPeer other in _net.ConnectedPeerList)
+        {
+            if (other != peer)
+            {
+                other.Send(relay, DeliveryMethod.ReliableOrdered);
+            }
+        }
+    }
+
+    private void ReceiveItemEvent(NetPeer peer, NetDataReader reader)
+    {
+        string key = reader.GetString();
+        byte kind = reader.GetByte();
+        var position = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+        var rotation = new Quaternion(
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat()
+        );
+        string itemName = reader.GetString();
+        string templateName = reader.GetString();
+
+        ItemSync.ApplyEvent(key, kind, position, rotation, itemName, templateName);
+
+        if (_settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        var relay = new NetDataWriter();
+        WriteItemEvent(relay, key, kind, position, rotation, itemName, templateName);
+        foreach (NetPeer other in _net.ConnectedPeerList)
+        {
+            if (other != peer)
+            {
+                other.Send(relay, DeliveryMethod.ReliableOrdered);
+            }
+        }
+    }
+
     private void ReceiveWeaponState(NetPeer peer, NetDataReader reader)
     {
         WeaponSnapshot snapshot = ReadWeaponState(reader, out int senderId);
@@ -1202,6 +1650,35 @@ internal sealed class CoopNetwork : IDisposable
             {
                 other.Send(relay, DeliveryMethod.Sequenced);
             }
+        }
+    }
+
+    private void ReceiveDamage(NetPeer peer, NetDataReader reader)
+    {
+        int targetId = reader.GetInt();
+        int dealerId = reader.GetInt();
+        int amount = reader.GetInt();
+        bool headshot = reader.GetBool();
+        Vector3 point = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+
+        if (targetId == _localId)
+        {
+            CombatSync.ApplyLocalDamage(dealerId, amount, headshot, point);
+            return;
+        }
+
+        if (_settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        // The host relays damage that one client aimed at another client.
+        NetPeer? target = FindPeer(targetId);
+        if (target != null && target != peer)
+        {
+            var relay = new NetDataWriter();
+            WriteDamage(relay, targetId, dealerId, amount, headshot, point);
+            target.Send(relay, DeliveryMethod.ReliableOrdered);
         }
     }
 

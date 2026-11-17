@@ -90,6 +90,10 @@ internal sealed class RemoteAvatar
     private float _appliedWeaponAnimatorTime;
     private float _weaponFlashUntil;
 
+    // Player-versus-player physics proxy (body capsule + head sphere). It is a
+    // child of the current root, so it is rebuilt together with the visual.
+    private RemoteHitProxy? _hitProxy;
+
     private int _actionHash;
     private float _actionTime;
     private bool _actionActive;
@@ -150,6 +154,9 @@ internal sealed class RemoteAvatar
     public string Name { get; set; }
 
     public GameObject Root { get; private set; }
+
+    /// <summary>Physics proxy that makes this puppet hittable and solid.</summary>
+    public RemoteHitProxy? HitProxy => _hitProxy;
 
     public Vector3 TargetPosition { get; set; }
 
@@ -1828,6 +1835,7 @@ internal sealed class RemoteAvatar
 
     public void Destroy()
     {
+        _hitProxy = null;
         if (Root != null)
         {
             UnityEngine.Object.Destroy(Root);
@@ -1858,7 +1866,9 @@ internal sealed class RemoteAvatar
             }
         }
 
-        return CreateCapsule();
+        GameObject capsule = CreateCapsule();
+        _hitProxy = CombatSync.AttachHitProxy(capsule, source, null, Id);
+        return capsule;
     }
 
     private GameObject ClonePlayerModel(Transform source)
@@ -2038,6 +2048,8 @@ internal sealed class RemoteAvatar
         {
             DumpCloneHands(clone);
         }
+
+        _hitProxy = CombatSync.AttachHitProxy(clone, source, _gameAnimator, Id);
 
         return clone;
     }

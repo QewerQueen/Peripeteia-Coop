@@ -86,6 +86,12 @@ internal static class ItemSync
         public bool WasKinematic { get; }
     }
 
+    internal enum ItemEventKind : byte
+    {
+        Pickup = 0,
+        Drop = 1,
+    }
+
     private static readonly List<ItemInfo> KnownItems = new();
     private static readonly Dictionary<ItemInfo, string> KeysByItem = new();
     private static readonly Dictionary<string, ItemState> LastSent = new();
@@ -103,6 +109,8 @@ internal static class ItemSync
     private static int _loggedCount = -1;
     private static int _sentChanges;
     private static int _appliedChanges;
+    private static int _eventsSent;
+    private static int _eventsApplied;
 
     public static void Register(ItemInfo? item)
     {
@@ -497,6 +505,265 @@ internal static class ItemSync
         }
     }
 
+    /// <summary>
+    /// Announces an immediate pickup so the other side hides the item without
+    /// waiting for the next poll.
+    /// </summary>
+    public static void OnLocalPickup(ItemInfo? item)
+    {
+        if (CoopPlugin.Settings.Role == CoopRole.Offline || item == null || item.gameObject == null)
+        {
+            return;
+        }
+
+        // After a pickup the item lives under the player, so only the NPC test
+        // applies here; the hierarchy key still resolves to the world original.
+        if (IsNpcItem(item))
+        {
+            return;
+        }
+
+        string key = GetKey(item);
+        if (!key.StartsWith(_scene + "|", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _eventsSent++;
+        CoopPlugin.Network?.SendItemEvent(
+            key,
+            (byte)ItemEventKind.Pickup,
+            item.transform.position,
+            item.transform.rotation,
+            item.ItemName ?? string.Empty,
+            TemplateNameOf(item)
+        );
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[items] pickup event key='{key}' item='{item.ItemName}'."
+        );
+    }
+
+    /// <summary>
+    /// Announces an immediate drop with the final world transform and the item
+    /// identity, so the other player can pick the item up (or spawn it when the
+    /// object does not exist locally).
+    /// </summary>
+    public static void OnLocalDrop(ItemInfo? item)
+    {
+        if (CoopPlugin.Settings.Role == CoopRole.Offline || item == null || item.gameObject == null)
+        {
+            return;
+        }
+
+        // Make sure a freshly dropped clone is aliased to the hidden original
+        // before the key is computed, so both peers agree on the logical item.
+        Register(item);
+
+        if (IsNpcItem(item))
+        {
+            return;
+        }
+
+        string key = GetKey(item);
+        if (!key.StartsWith(_scene + "|", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _eventsSent++;
+        CoopPlugin.Network?.SendItemEvent(
+            key,
+            (byte)ItemEventKind.Drop,
+            item.transform.position,
+            item.transform.rotation,
+            item.ItemName ?? string.Empty,
+            TemplateNameOf(item)
+        );
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[items] drop event key='{key}' item='{item.ItemName}' " +
+            $"pos={item.transform.position}."
+        );
+    }
+
+    /// <summary>Applies a pickup/drop event received from another player.</summary>
+    public static void ApplyEvent(
+        string key,
+        byte kind,
+        Vector3 position,
+        Quaternion rotation,
+        string itemName,
+        string templateName
+    )
+    {
+        if (CoopPlugin.Settings.Role == CoopRole.Offline || string.IsNullOrEmpty(key))
+        {
+            return;
+        }
+
+        if (!key.StartsWith(_scene + "|", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // The local player owns whatever is in their hands right now.
+        if (LocalBusyKeys.Contains(key))
+        {
+            return;
+        }
+
+        _eventsApplied++;
+
+        if (kind == (byte)ItemEventKind.Pickup)
+        {
+            Apply(key, true, false, Vector3.zero, Quaternion.identity, false);
+            return;
+        }
+
+        List<ItemInfo>? instances = FindInstances(key);
+        if (instances == null)
+        {
+            Refresh();
+            instances = FindInstances(key);
+        }
+
+        if (instances == null)
+        {
+            if (CoopPlugin.ItemsSpawnMissing)
+            {
+                TrySpawnDropped(key, position, rotation, itemName, templateName);
+            }
+            else if (CoopPlugin.ProbeEnabled)
+            {
+                CoopPlugin.LogSource.LogInfo(
+                    $"[items] drop for unknown key '{key}' item='{itemName}' " +
+                    "(Items.SpawnMissing is off)."
+                );
+            }
+
+            return;
+        }
+
+        Apply(key, true, true, position, rotation, false);
+    }
+
+    private static string TemplateNameOf(ItemInfo item)
+    {
+        ItemInfo root = FollowOriginal(item);
+        if (root != null && root.gameObject != null)
+        {
+            return root.gameObject.name;
+        }
+
+        return item.gameObject.name;
+    }
+
+    /// <summary>
+    /// Experimental: recreates a dropped item that never existed on this side by
+    /// cloning a matching template from the scene. Enabled with
+    /// Items.SpawnMissing; off by default because a badly matched template can
+    /// spawn the wrong object.
+    /// </summary>
+    private static void TrySpawnDropped(
+        string key,
+        Vector3 position,
+        Quaternion rotation,
+        string itemName,
+        string templateName
+    )
+    {
+        try
+        {
+            ItemInfo? template = FindSpawnTemplate(itemName, templateName);
+            if (template == null || template.gameObject == null)
+            {
+                CoopPlugin.LogSource.LogInfo(
+                    $"[items] no template for dropped item '{itemName}' (key '{key}')."
+                );
+                return;
+            }
+
+            GameObject spawn = UnityEngine.Object.Instantiate(
+                template.gameObject,
+                position,
+                rotation
+            );
+            spawn.name = StripCloneSuffix(template.gameObject.name) + " (CoopDrop)";
+            spawn.SetActive(true);
+
+            ItemInfo? spawned = spawn.GetComponentInChildren<ItemInfo>();
+            if (spawned == null)
+            {
+                UnityEngine.Object.Destroy(spawn);
+                return;
+            }
+
+            KeysByItem[spawned] = key;
+            if (!KnownItems.Contains(spawned))
+            {
+                KnownItems.Add(spawned);
+            }
+
+            LastSent[key] = new ItemState(true, true, position, rotation, false);
+            PreviouslyKnownKeys.Add(key);
+            SeenActiveKeys.Add(key);
+
+            CoopPlugin.LogSource.LogInfo(
+                $"[items] spawned dropped item '{itemName}' for key '{key}'."
+            );
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[items] failed to spawn dropped item: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    private static ItemInfo? FindSpawnTemplate(string itemName, string templateName)
+    {
+        string wantedTemplate = StripCloneSuffix(templateName);
+        ItemInfo? fallback = null;
+
+        foreach (ItemInfo candidate in Resources.FindObjectsOfTypeAll<ItemInfo>())
+        {
+            if (candidate == null || candidate.gameObject == null || IsHeldOrNpcItem(candidate))
+            {
+                continue;
+            }
+
+            string objectName = StripCloneSuffix(candidate.gameObject.name);
+            if (!string.IsNullOrEmpty(wantedTemplate) &&
+                string.Equals(objectName, wantedTemplate, StringComparison.Ordinal))
+            {
+                return candidate;
+            }
+
+            if (fallback == null &&
+                !string.IsNullOrEmpty(itemName) &&
+                string.Equals(candidate.ItemName, itemName, StringComparison.Ordinal))
+            {
+                fallback = candidate;
+            }
+        }
+
+        return fallback;
+    }
+
+    private static string StripCloneSuffix(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return string.Empty;
+        }
+
+        const string suffix = "(Clone)";
+        return name.EndsWith(suffix, StringComparison.Ordinal)
+            ? name.Substring(0, name.Length - suffix.Length).Trim()
+            : name;
+    }
+
     private static void PollAndSend(float now)
     {
         PruneDestroyed();
@@ -723,6 +990,16 @@ internal static class ItemSync
     /// </summary>
     private static bool IsHeldOrNpcItem(ItemInfo item)
     {
+        return IsNpcItem(item) || IsPlayerChild(item);
+    }
+
+    /// <summary>
+    /// True for items owned by an NPC (weapon slots, enemy inventories). This is
+    /// checked without the "is a child of the local player" test so a pickup can
+    /// still be announced after the item has moved into the player's hands.
+    /// </summary>
+    private static bool IsNpcItem(ItemInfo item)
+    {
         if (item == null)
         {
             return true;
@@ -761,7 +1038,7 @@ internal static class ItemSync
             return true;
         }
 
-        return IsPlayerChild(item);
+        return false;
     }
 
     private static void RefreshLocalBusy()
@@ -1113,6 +1390,15 @@ internal static class ItemRegisterOnLoadPatch
     }
 }
 
+[HarmonyPatch(typeof(ItemInfo), "pickupitem", new Type[] { })]
+internal static class ItemPickupEventPatch
+{
+    private static void Postfix(ItemInfo __instance)
+    {
+        ItemSync.OnLocalPickup(__instance);
+    }
+}
+
 [HarmonyPatch(typeof(ItemInfo), "dropOnGround", new Type[] { typeof(Vector3), typeof(Vector3), typeof(float) })]
 internal static class ItemRegisterDroppedPatch
 {
@@ -1120,6 +1406,7 @@ internal static class ItemRegisterDroppedPatch
     {
         ItemSync.Register(__instance);
         ItemSync.LogDropped(__instance);
+        ItemSync.OnLocalDrop(__instance);
     }
 }
 
@@ -1134,5 +1421,6 @@ internal static class ItemRegisterDroppedDetailedPatch
     {
         ItemSync.Register(__instance);
         ItemSync.LogDropped(__instance);
+        ItemSync.OnLocalDrop(__instance);
     }
 }

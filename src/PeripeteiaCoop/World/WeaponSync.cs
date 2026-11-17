@@ -156,7 +156,7 @@ internal static class WeaponSync
         // Only the player's own weapon is interesting. NPC weapons use the
         // same Shoot component, and firing one must not make the remote player
         // flash a muzzle.
-        if (shoot.GetComponentInParent<PlayerMovement>() == null)
+        if (!IsLocalPlayerWeapon(shoot))
         {
             return;
         }
@@ -168,6 +168,16 @@ internal static class WeaponSync
 
         _nextShotNotify = Time.unscaledTime + 0.015f;
         CoopPlugin.Network.SendWeaponEvent((byte)WeaponEvent.Shot);
+    }
+
+    /// <summary>
+    /// True when this <see cref="Shoot"/> belongs to the local player rather
+    /// than an NPC. NPC weapons use the same component, so both the muzzle-flash
+    /// replication and the combat hit detection have to filter them out.
+    /// </summary>
+    public static bool IsLocalPlayerWeapon(Shoot? shoot)
+    {
+        return shoot != null && shoot.GetComponentInParent<PlayerMovement>() != null;
     }
 
     private static PlayerShootScript? GetShoot(PlayerMovement localPlayer)

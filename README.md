@@ -2,16 +2,23 @@
 
 An experimental co-op / multiplayer mod for **Peripeteia** (Unity 2021.3.11f1, IL2CPP, x64).
 
-> Status: **early public prototype (M4: items and weapons)**. Two game instances
-> can connect over UDP, spawn a complete cloned Marie model for the other player,
-> synchronize position and rotation at 30 Hz and drive her full game animations,
-> including Q/E leaning and the dragging hand. Visual held-weapon replication
-> and muzzle flashes are experimental. Doors are synchronized host-authoritatively,
-> and a prototype world-item layer mirrors pickup/drop/drag for items that already
-> exist in the scene. The client reconnects automatically after a host restart.
-> Inventory contents, ammo, damage, quests, NPC reactions and scene transitions
-> are not synchronized yet. Do not expect a complete co-op playthrough at this
-> stage.
+> Status: **early public prototype (M5: shared world, NPCs and story)**. Two
+> game instances can connect over UDP, spawn a complete cloned Marie model for the
+> other player, synchronize position and rotation at 30 Hz and drive her full game
+> animations, including Q/E leaning and the dragging hand. Visual held-weapon
+> replication and muzzle flashes are experimental. Doors are synchronized
+> host-authoritatively, and a prototype world-item layer mirrors
+> pickup/drop/drag for items that already exist in the scene. Players can shoot and
+> collide with each other: every remote puppet gets a physics proxy and hits are
+> applied through the game's real damage system on the victim's machine. NPCs and
+> enemies are mirrored host-authoritatively, with shared deaths. The story now
+> follows one shared branch: a dialogue, quest object or scripted teleport is
+> consumed by whichever player reaches it first, and the world changes it causes
+> are replayed on the other machine, so quest items and rewards are not duplicated.
+> The client reconnects automatically after a host restart.
+> Inventory contents, ammo and scene transitions are still per-player; NPC AI only
+> chases the host, and cutscenes are not shared yet. Do not expect a complete co-op
+> playthrough at this stage.
 
 ## Why this is a big project
 
@@ -95,15 +102,21 @@ the world keeps running; losing focus no longer opens the menu automatically.
 A normal single-player launch is unchanged.
 Doors opened on the host are mirrored to the client. A prototype item layer
 mirrors world items that already exist in the scene: pickup hides the item on
-the other side, drop restores it, and dragging moves it. It uses last-writer-wins
-and does not transfer inventory contents or item ownership; newly spawned items
-are best-effort. The currently held weapon is cloned from a real game `ItemInfo`
+the other side, drop restores it, and dragging moves it. Pickup and drop also
+send an immediate, reliable event so sharing an item is instant instead of
+waiting for the next poll. It uses last-writer-wins and does not transfer
+inventory contents or item ownership; newly spawned items are best-effort (set
+`Items.SpawnMissing = true` to let a peer clone a matching template). The
+currently held weapon is cloned from a real game `ItemInfo`
 and attached to the remote puppet's right-hand bone, using the sender's aim
 rotation; firing/reload/swing body states and muzzle flashes are replayed. This
 is visual only: ammo, damage, attachments and inventory are not shared. The
 grip offset can be tuned with `Weapon.GripDown` and `Weapon.GripForward` in the
-BepInEx config. A small overlay shows the connection state; disable it with
-`Ui.ShowStatus = false` in the BepInEx config.
+BepInEx config. Players can damage and physically block each other: a bullet that
+hits the other puppet is sent to that player, who applies it through the game's
+real `HealthScript`, and a body/head proxy makes the other player solid. Tune or
+disable this with the `Combat.*` config keys. A small overlay shows the
+connection state; disable it with `Ui.ShowStatus = false` in the BepInEx config.
 See [docs/SOLO_TESTING.md](docs/SOLO_TESTING.md) for details, or the Russian
 step-by-step guide below.
 
@@ -111,7 +124,8 @@ step-by-step guide below.
 
 Это проверка на одном ПК: одно окно — хост, второе — клиент. Полноценное
 совместное прохождение пока невозможно, но подключение, движение, анимации,
-наклоны, перетаскивание, двери и часть мировых предметов так проверить можно.
+наклоны, перетаскивание, двери, мировые предметы, урон между игроками, общий
+мир NPC и общая сюжетная ветка — это проверить можно.
 
 ### 1. Создай общее сохранение
 
@@ -166,8 +180,18 @@ cd C:\Path\To\PeripeteiaCoop
   клиент увидит то же состояние.
 - **Мировые предметы** (которые уже лежат в сцене) частично синхронизируются:
   подбор скрывает предмет у второго игрока, бросок возвращает его, а
-  перетаскивание двигает. Это прототип по принципу «побеждает последний
-  изменивший»; содержимое инвентаря и владение предметом не передаются.
+  перетаскивание двигает. Подбор и бросок дополнительно шлют мгновенное
+  надёжное событие, так что «передать» предмет другому игроку можно сразу.
+  Это прототип по принципу «побеждает последний изменивший»; содержимое
+  инвентаря и владение предметом не передаются. Если нужно, чтобы падал предмет,
+  которого на другой стороне нет, включи `Items.SpawnMissing = true`
+  (экспериментально).
+- **Урон и столкновения между игроками** работают: у удалённого персонажа есть
+  физический прокси (капсула тела + сфера головы), поэтому в него можно
+  попасть и он становится твёрдым. Попадание отправляется владельцу, а урон
+  применяется на его машине через настоящий `HealthScript` (конечности, кровь,
+  смерть и HUD работают). Отключается и настраивается ключами `Combat.*`
+  в конфиге BepInEx.
 - **Оружие в руках** — экспериментальный визуальный прототип. На удалённом
   персонаже показывается клон настоящего игрового предмета, прикреплённый к
   кости правой кисти; направление ствола берётся из прицела отправителя, а
@@ -176,8 +200,21 @@ cd C:\Path\To\PeripeteiaCoop
   Мод не создаёт оружие «из воздуха»: если на другой стороне нет подходящего
   `ItemInfo`, оружие просто не отображается. Патроны, урон, обвесы и инвентарь
   пока локальные.
-- **Инвентарь, экипировка, квесты, AI и переходы между сценами** пока не
-  синхронизируются.
+- **NPC и враги синхронизируются от хоста**: хост симулирует AI, клиент
+  повторяет позицию, поворот, анимацию и здоровье. Убийство NPC одним игроком
+  засчитывается обоим. Настраивается секцией `Ai.*` в конфиге BepInEx.
+- **Сюжет идёт по одной общей ветке**: диалог, квестовый объект или скриптовый
+  телепорт «забирает» тот игрок, кто дошёл до него первым; второй в это уже не
+  может вмешаться, поэтому квестовые предметы и награды не выдаются дважды.
+  Мировые последствия квестового объекта (что включилось/выключилось) повторяются
+  у второго игрока, так что открытые двери и появившиеся объекты видны обоим.
+  Настраивается секцией `Story.*` в конфиге BepInEx.
+- **Телепорты**: телепортер, в который игрок просто входит, повторяемый и
+  локальный — каждый переносится сам. Телепорт, вызванный скриптом (не входом),
+  считается одноразовым и переносит **обоих** игроков.
+- **Инвентарь, экипировка, патроны и переходы между сценами** пока
+  локальные. Урон между игроками и убийства NPC — да, общий инвентарь и деньги —
+  ещё нет. Катсцены (видео) пока не раздаются второму игроку.
 - Если связь пропала, клиент сам переподключится примерно через 2 секунды
   после возвращения хоста. Вверху экрана есть небольшой статус подключения.
 
@@ -244,10 +281,10 @@ NullReferenceException
 - **Клиент не может загрузить уровень или начать новую игру** — временно
   поставь `BlockSaves = false` в `BepInEx\config\peripeteia.coop.cfg`. Но тогда
   клиент сможет затереть сохранение хоста.
-- **Предметы в инвентаре, оружие, патроны или квесты ведут себя по-разному** —
-  это ожидаемо: синхронизируются только двери, часть мировых предметов и
-  визуальный прототип оружия в руках. AI, инвентарь, экипировка, урон, квесты
-  и переходы между сценами пока локальные.
+- **Предметы в инвентаре, оружие, патроны или деньги ведут себя по-разному** —
+  это ожидаемо: инвентарь, экипировка, патроны и деньги у каждого игрока свои.
+  Общими являются двери, мировые предметы, NPC/враги, сюжетная ветка и урон между
+  игроками. Переходы между сценами и катсцены пока локальные.
 
 После закрытия окон сейвы автоматически копируются в
 `local/saves_backup/<дата-время>/EASaves`.
@@ -278,14 +315,30 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
 - Remote avatars use the game's Animator, Q/E lean and a simplified drag-hand
   pose. Held weapons are a visual prototype: the remote side clones a real
   `ItemInfo`, and fire/reload/swing body states and muzzle flashes are replayed.
-  Exact IK, attachments, ammo and damage are not synchronized.
+  Exact IK, attachments and ammo are not synchronized.
+- Player-versus-player damage and collision work through a physics proxy and a
+  reliable damage packet. Damage is applied on the victim's machine via the real
+  `HealthScript`. It is a prototype: NPC damage/death, hit regions beyond the
+  body/head capsule, and friendly-fire policy are not finished.
 - Skins, inventory contents, equipment ownership and the other player's item
   list are not synchronized.
 - Doors and a prototype layer for world items already present in the scene are
-  networked. Item sync is last-writer-wins; dropped copies, containers and
-  newly spawned items can still diverge. AI reactions, dialogue, quests and
-  scene transitions are still local to each instance. Synchronizing them is the
-  next stage (M5-M6 in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
+  networked. Pickup/drop also send an immediate reliable event. Item sync is
+  last-writer-wins; dropped copies, containers and newly spawned items can still
+  diverge (an experimental `Items.SpawnMissing` option can clone a template).
+- NPCs and enemies are mirrored host-authoritatively (`Ai.*` config) and deaths
+  are shared. The host also registers the remote player as an AI target
+  (`Ai.TargetRemotePlayer`, experimental) so enemies can notice, chase and shoot
+  at the client; the client still takes no AI damage from the host's simulation,
+  only from player-versus-player combat.
+- The story follows one shared branch (`Story.*` config): a one-time dialogue,
+  quest object or scripted teleport is consumed by the first player to reach it,
+  and the world GameObjects it switches are replayed on the other machine. Quest
+  items and rewards therefore stay on the player who triggered them. The
+  quest-log effects of a dialogue branch are shared too (`Story.SyncDialogueActions`),
+  and video cutscenes are replayed on both machines (`Story.SyncCutscenes`). The
+  raw VIDE node progression itself is not mirrored, and scene transitions are
+  still local to each instance.
 - Both instances must enter the same level manually.
 - Both players need the same mod version and game version; the handshake rejects
   mismatches. A client reconnects automatically after a host restart, but the
@@ -340,10 +393,15 @@ MIT (see [LICENSE](LICENSE)).
 
 Кратко по-русски: это экспериментальный кооп-мод. Сейчас два экземпляра игры
 соединяются по UDP, видят друг друга в виде полного клона Марии и синхронизируют
-позицию/поворот (30 Гц), полноценные игровые анимации, наклоны, двери и
-визуальный прототип оружия в руках. Клиент не может перезаписать сохранения, но
-умеет переподключаться после перезапуска хоста. Мировые предметы
-синхронизируются частично; инвентарь, патроны, урон, квесты, реакции NPC и
-переходы между сценами ещё не синхронизируются — это следующие этапы.
+позицию/поворот (30 Гц), полноценные игровые анимации, наклоны, двери,
+визуальный прототип оружия в руках, урон/столкновения между игроками, общий мир
+NPC/врагов и одну общую сюжетную ветку (диалоги, квестовые объекты и скриптовые
+телепорты «забирает» тот, кто дошёл первым, поэтому награды не дублируются).
+Клиент не может перезаписать сохранения, но умеет переподключаться после
+перезапуска хоста. Враги/НПС теперь видят и клиента (хост регистрирует его как
+цель AI), а катсцены и эффекты веток диалога (журнал заданий) раздаются обоим.
+Мировые предметы синхронизируются частично, а подбор/бросок шлёт мгновенные
+события, чтобы делиться предметами; инвентарь, патроны, деньги и переходы между
+сценами ещё не синхронизируются — это следующие этапы.
 Инструкции — в `docs/`, сборка — `scripts/build.ps1`, тест на одном ПК —
 `scripts/run-two.ps1`.

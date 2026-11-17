@@ -34,7 +34,12 @@
 | `VirtualInput` (static) | виртуальный ввод | `Press(KeyCode)`, `GetKey`, `GetKeyDown`, `GetKeyUp` |
 | `Keybind` / `Axisbind` | привязки клавиш/осей | `down()`, `justNowDown()`, `getValue()`, `update()` |
 | `TimeController` | управление временем | 60 строк дампа |
-| `NPCConversation` / `QuestLog` / `QuestAction` | диалоги и квесты | VIDE-диалоги, флаги квестов |
+| `NPCConversation` / `QuestLog` / `QuestAction` | диалоги и квесты | VIDE-диалоги (`StartConversation()`), `useQuestObject()`, `activateQuestObject()`, `activatedGameobjects`/`deactivatedGameobjects`, `multipleUse` |
+| `teleport` / `Triggerer` | телепорты и триггеры | `teleportto`, `adjustment`, `OnTriggerEnter(Collider)`, `tyeleport()`; `Triggerer.activatedGameobjects`, `destroyonuse` |
+| `EnemyController` / `dynamicenemymover` | AI и движение врагов | `anim`, `health`, `Update()`, `LateUpdate()` (патчатся для заморозки клиента) |
+| `AITarget` / `AIController.addCustomTarget` | регистрация не-врага (игрока) как цели AI | `AITarget.DMG`/`Faction`/`FactionNo`/`customTarget`; `addCustomTarget(bool add, Transform centerOfMass, float sightRange, int fact, EnemyController ec, HealthScript HP, damageScript dmg, AITarget aiTarget, Senses senses, HitBoxes hboxes)` |
+| `VIDE_Data.VD` / `VD2` / `ActionNode` | диалоги VIDE и их эффекты | `VD.currentActionNode` (static) / `VD2.currentActionNode` (instance), событие `OnActionNode`; `ActionNode.gameObjectName`/`methodName`/`paramType`/`param_int`; `DoAction()` — точка патча |
+| `VideoPlayer` / `cutsceneplayer` | видео-катсцены | `cutsceneplayer.vp`, `destroyobjectonend`; `UnityEngine.Video.VideoPlayer.Play()` — точка патча |
 
 ## Иерархия игрока (runtime dump)
 
@@ -98,8 +103,12 @@ Player
 ## Сетевой протокол прототипа
 
 - LiteNetLib 1.3.5, UDP, ключ `peripeteia-coop`, порт 7777.
-- Сообщения: `Hello` (протокол, версия мода, версия игры, имя клиента),
-  `Welcome` (id + те же версии + имя хоста), `Pose`.
+- Типы сообщений (`PacketType`): `Hello` (1), `Welcome` (2), `Pose` (3),
+  `DoorState` (4), `ItemState` (5), `WeaponState` (6), `WeaponEvent` (7),
+  `Damage` (8), `ItemEvent` (9), `EnemyState` (10), `EnemyDeath` (11),
+  `StoryEvent` (12). Текущая версия протокола — 15.
+- `Hello` — протокол, версия мода, версия игры, имя клиента; `Welcome` — id +
+  те же версии + имя хоста.
 - Несовпадение версии протокола/мода/игры — отказ и disconnect.
 - Клиент делает до 120 попыток connect с интервалом 0,5 с: хост может быть
   ещё занят загрузкой сцены.
