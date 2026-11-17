@@ -107,8 +107,8 @@ mirrors world items that already exist in the scene: pickup hides the item on
 the other side, drop restores it, and dragging moves it. Pickup and drop also
 send an immediate, reliable event so sharing an item is instant instead of
 waiting for the next poll. It uses last-writer-wins and does not transfer
-inventory contents or item ownership; newly spawned items are best-effort (set
-`Items.SpawnMissing = true` to let a peer clone a matching template). The
+inventory contents or item ownership; a dropped item the other side never had is
+cloned from a matching template (`Items.SpawnMissing`, on by default). The
 currently held weapon is cloned from a real game `ItemInfo`
 and attached to the remote puppet's right-hand bone, using the sender's aim
 rotation; firing/reload/swing body states and muzzle flashes are replayed. This
@@ -184,10 +184,10 @@ cd C:\Path\To\PeripeteiaCoop
   подбор скрывает предмет у второго игрока, бросок возвращает его, а
   перетаскивание двигает. Подбор и бросок дополнительно шлют мгновенное
   надёжное событие, так что «передать» предмет другому игроку можно сразу.
-  Это прототип по принципу «побеждает последний изменивший»; содержимое
-  инвентаря и владение предметом не передаются. Если нужно, чтобы падал предмет,
-  которого на другой стороне нет, включи `Items.SpawnMissing = true`
-  (экспериментально).
+  Выброшенный предмет, которого у второго игрока не было (например награда из
+  диалога), клонируется из подходящего шаблона — `Items.SpawnMissing` включён по
+  умолчанию. Это прототип по принципу «побеждает последний изменивший»;
+  содержимое инвентаря и владение предметом не передаются.
 - **Урон и столкновения между игроками** работают: у удалённого персонажа есть
   физический прокси (капсула тела + сфера головы), поэтому в него можно
   попасть и он становится твёрдым. Попадание отправляется владельцу, а урон
@@ -203,20 +203,25 @@ cd C:\Path\To\PeripeteiaCoop
   `ItemInfo`, оружие просто не отображается. Патроны, урон, обвесы и инвентарь
   пока локальные.
 - **NPC и враги синхронизируются от хоста**: хост симулирует AI, клиент
-  повторяет позицию, поворот, анимацию и здоровье. Убийство NPC одним игроком
-  засчитывается обоим. Настраивается секцией `Ai.*` в конфиге BepInEx.
+  повторяет позицию, поворот, анимацию и здоровье. Движение клиент сглаживает
+  каждый кадр, а анимация не перезапускается на каждом пакете, поэтому NPC не
+  дёргаются. Убийство NPC одним игроком засчитывается обоим. Настраивается
+  секцией `Ai.*` в конфиге BepInEx.
 - **Сюжет идёт по одной общей ветке**: диалог, квестовый объект или скриптовый
   телепорт «забирает» тот игрок, кто дошёл до него первым; второй в это уже не
   может вмешаться, поэтому квестовые предметы и награды не выдаются дважды.
-  Мировые последствия квестового объекта (что включилось/выключилось) повторяются
-  у второго игрока, так что открытые двери и появившиеся объекты видны обоим.
-  Настраивается секцией `Story.*` в конфиге BepInEx.
+  Диалог при этом стартует только у того, кто реально стоит у NPC. Мировые
+  последствия квестового объекта (что включилось/выключилось) повторяются у
+  второго игрока, так что открытые двери и появившиеся объекты видны обоим.
+  Стартовое оружие и экипировку получают оба игрока (`Story.ShareItemRewards`),
+  катсцены (видео) видит вся команда (`Story.SyncCutscenes`). Настраивается
+  секцией `Story.*` в конфиге BepInEx.
 - **Телепорты**: телепортер, в который игрок просто входит, повторяемый и
   локальный — каждый переносится сам. Телепорт, вызванный скриптом (не входом),
   считается одноразовым и переносит **обоих** игроков.
 - **Инвентарь, экипировка, патроны и переходы между сценами** пока
   локальные. Урон между игроками и убийства NPC — да, общий инвентарь и деньги —
-  ещё нет. Катсцены (видео) пока не раздаются второму игроку.
+  ещё нет.
 - Если связь пропала, клиент сам переподключится примерно через 2 секунды
   после возвращения хоста. Вверху экрана есть небольшой статус подключения.
 
@@ -326,28 +331,34 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   list are not synchronized.
 - Doors and a prototype layer for world items already present in the scene are
   networked. Pickup/drop also send an immediate reliable event. Item sync is
-  last-writer-wins; dropped copies, containers and newly spawned items can still
-  diverge (an experimental `Items.SpawnMissing` option can clone a template).
+  last-writer-wins; containers can still diverge. A dropped item the other side
+  never had is cloned from a matching template (`Items.SpawnMissing`, on by
+  default).
 - NPCs and enemies are mirrored host-authoritatively (`Ai.*` config) and deaths
-  are shared. The host also registers the remote player as an AI target
+  are shared. Mirrored actors are eased towards each snapshot every frame and
+  their animation is not restarted on every packet, so they move smoothly. The
+  host also registers the remote player as an AI target
   (`Ai.TargetRemotePlayer`, experimental) so enemies can notice, chase and shoot
   at the client; the client still takes no AI damage from the host's simulation,
   only from player-versus-player combat.
 - The story follows one shared branch (`Story.*` config): a one-time dialogue,
   quest object or scripted teleport is consumed by the first player to reach it,
-  and the world GameObjects it switches are replayed on the other machine. Quest
-  items and rewards therefore stay on the player who triggered them. The
-  quest-log effects of a dialogue branch are shared too (`Story.SyncDialogueActions`),
-  the world-effect listeners a quest object drives (doors, pistons, elevators,
-  GameObject toggles) are replayed on the other machine
-  (`Story.SyncQuestEffects`), and video cutscenes are replayed on both machines
-  (`Story.SyncCutscenes`). Reward and inventory listeners are never replayed. The
-  raw VIDE node progression itself is not mirrored, and scene transitions are
-  still local to each instance.
+  and the world GameObjects it switches are replayed on the other machine. A
+  dialogue also only starts for the player actually standing at the NPC. Quest
+  items and rewards therefore stay on the player who triggered them, except the
+  starting weapons and equipment, which both players receive
+  (`Story.ShareItemRewards`). The quest-log effects of a dialogue branch are
+  shared too (`Story.SyncDialogueActions`), the world-effect listeners a quest
+  object drives (doors, pistons, elevators, GameObject toggles) are replayed on
+  the other machine (`Story.SyncQuestEffects`), and video cutscenes are replayed
+  on both machines (`Story.SyncCutscenes`). The raw VIDE node progression itself
+  is not mirrored, and scene transitions are still local to each instance.
 - Player death is shared (`Player.SyncDeath`): the remote body goes down where it
   fell and stands back up on revive. The game's own baked ragdoll rig is used
-  (`Player.DeathRagdoll`); if the model has no rig the body simply stops
-  animating. A dead teammate cannot be searched or looted.
+  (`Player.DeathRagdoll`); the ragdoll colliders are moved onto the layer of the
+  surface under the body so the corpse does not fall through the floor. If the
+  model has no rig the body simply stops animating. A dead teammate cannot be
+  searched or looted.
 - Both instances must enter the same level manually.
 - Both players need the same mod version and game version; the handshake rejects
   mismatches. A client reconnects automatically after a host restart, but the

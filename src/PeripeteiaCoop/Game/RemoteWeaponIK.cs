@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace PeripeteiaCoop;
@@ -22,6 +23,7 @@ public sealed class RemoteWeaponIK : MonoBehaviour
     private bool _loggedCallback;
     private bool _loggedActive;
     private bool _loggedTarget;
+    private bool _loggedError;
 
     public void Configure(Animator animator, Vector3 handRotationMod)
     {
@@ -171,6 +173,30 @@ public sealed class RemoteWeaponIK : MonoBehaviour
     }
 
     private void OnAnimatorIK(int layerIndex)
+    {
+        // Unity calls this every frame; a single null bone or a stale IL2CPP
+        // wrapper used to throw here and spam the log with NullReferenceException.
+        try
+        {
+            OnAnimatorIKImpl(layerIndex);
+        }
+        catch (Exception exception)
+        {
+            if (!_loggedError)
+            {
+                _loggedError = true;
+                CoopPlugin.LogSource.LogWarning(
+                    $"[avatar] weapon IK disabled after error on '{name}': " +
+                    $"{exception.GetType().Name}: {exception.Message}"
+                );
+            }
+
+            _targetActive = false;
+            _weight = 0.0f;
+        }
+    }
+
+    private void OnAnimatorIKImpl(int layerIndex)
     {
         if (!_loggedCallback)
         {

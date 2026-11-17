@@ -46,7 +46,7 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static float CombatDamageScale { get; private set; } = 1.0f;
 
-    internal static bool ItemsSpawnMissing { get; private set; }
+    internal static bool ItemsSpawnMissing { get; private set; } = true;
 
     internal static bool AiEnabled { get; private set; } = true;
 
@@ -73,6 +73,8 @@ public sealed class CoopPlugin : BasePlugin
     internal static bool StorySyncDialogueActions { get; private set; } = true;
 
     internal static bool StorySyncQuestEffects { get; private set; } = true;
+
+    internal static bool StoryShareItemRewards { get; private set; } = true;
 
     internal static bool PlayerSyncDeath { get; private set; } = true;
 
@@ -186,8 +188,8 @@ public sealed class CoopPlugin : BasePlugin
         ItemsSpawnMissing = Config.Bind(
             "Items",
             "SpawnMissing",
-            false,
-            "Experimental: when a player drops an item this side never had, clone a matching template from the scene so it can be picked up. May spawn the wrong object; off by default."
+            true,
+            "When a player drops an item this side never had (for example a quest reward), clone a matching template from the scene so the teammate can see and pick it up. Turn off to only sync items both sides already have."
         ).Value;
 
         AiEnabled = Config.Bind(
@@ -279,6 +281,13 @@ public sealed class CoopPlugin : BasePlugin
             "SyncQuestEffects",
             true,
             "Replay the world-effect listeners a quest object drives (doors, pistons, elevators, GameObject toggles) on the other machine. Reward and inventory listeners are never replayed."
+        ).Value;
+
+        StoryShareItemRewards = Config.Bind(
+            "Story",
+            "ShareItemRewards",
+            true,
+            "Also replay the item listeners a quest object drives (ItemInfo.pickupitem, GiftGiver.GiveAllGifts) on the other machine, so both players get the starting weapons and equipment. Turn off if a unique quest item must stay single."
         ).Value;
 
         PlayerSyncDeath = Config.Bind(

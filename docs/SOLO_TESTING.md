@@ -198,11 +198,14 @@ BepInEx/LogOutput.1.log
 [story] applied remote QuestAction '...' (objects=2)
 [story] quest trigger[0].assign -> elevator.selectFloor (mode=3, target='elevator, Assembly-CSharp')
 [story] quest '...': applied world effect 'elevator.selectFloor'.
+[story] quest '...': applied item reward 'GiftGiver.GiveAllGifts'.
 [story] cutscene '...' broadcast to the other player.
 [story] dialogue effect '....SetQuestLog(3)' shared with the other player.
+[items] spawned dropped item 'Makarov' for key '...' from template 'Makarov(Clone)'.
 [death] local player died at (x, y, z).
-[death] ragdoll rig for remote 1: bodies=14, colliders=14, joints=13, colliderLayers=[9,9,...], playerLayer=3, hitboxLayers=starting=256,default=512,gore=1024.
-[death] remote 1 is down (ragdoll bodies=14, colliders=14, joints=13, layer=3).
+[death] ragdoll rig for remote 1: bodies=14, colliders=14, joints=13, colliderLayers=[9(Player)], playerLayer=2(Ignore Raycast), hitboxLayers=starting=256,default=512,gore=1024.
+[death] ragdoll layer for remote 1: 0(Default) (probe=0(Default)).
+[death] remote 1 is down (ragdoll bodies=14, colliders=14, joints=13).
 [death] remote 1 is back up.
 [net] ... poses: 1@(x,y,z)
 ```
@@ -267,8 +270,9 @@ BlockSaves = false
   оружия в руках.
 - Двери синхронизирует хост; остальной мир пока нет.
 - Мировые предметы, уже существующие в сцене, синхронизируются по принципу
-  «последний записавший прав». Хост пока не авторитетен для предметов;
-  выброшенные копии и контейнеры могут расходиться.
+  «последний записавший прав». Хост пока не авторитетен для предметов.
+  Выброшенный предмет, которого у второго игрока не было, клонируется из
+  подходящего шаблона (`Items.SpawnMissing`); контейнеры могут расходиться.
 - NPC/враги зеркалит хост (`Ai.*`); смерти общие. Хост также отдаёт удалённого
   игрока AI как цель (`Ai.TargetRemotePlayer`), поэтому враги замечают и
   обстреливают обоих; урон от AI по клиенту пока не применяется.

@@ -42,9 +42,23 @@ internal static class EnemySync
         public float SentAt;
     }
 
+    /// <summary>
+    /// Latest snapshot received from the host for one actor. The transform is
+    /// not written on packet receipt; <see cref="LateTick"/> eases towards the
+    /// snapshot every frame, which is what keeps a mirrored NPC moving smoothly
+    /// instead of stepping once per packet.
+    /// </summary>
+    private sealed class MirrorTarget
+    {
+        public Vector3 Position;
+        public Quaternion Rotation;
+        public bool Snap;
+    }
+
     private static readonly Dictionary<string, EnemyController> KnownEnemies = new();
     private static readonly Dictionary<string, int> EnemyIds = new();
     private static readonly Dictionary<string, MirrorState> LastMirror = new();
+    private static readonly Dictionary<string, MirrorTarget> Targets = new();
     private static readonly HashSet<string> AnnouncedDead = new();
     private static readonly HashSet<int> FrozenIds = new();
 
@@ -155,16 +169,16 @@ internal static class EnemySync
 
         Freeze(enemy);
 
-        try
+        // Store the snapshot; LateTick eases the transform towards it so the
+        // actor keeps moving between the host's packets.
+        if (!Targets.TryGetValue(key, out MirrorTarget? target) || target == null)
         {
-            Transform transform = enemy.transform;
-            transform.position = Vector3.Lerp(transform.position, position, 0.65f);
-            transform.rotation = Quaternion.Slerp(transform.rotation, rotation, 0.65f);
+            target = new MirrorTarget { Snap = true };
+            Targets[key] = target;
         }
-        catch (Exception)
-        {
-            // Transform writes are best-effort; never break the local frame.
-        }
+
+        target.Position = position;
+        target.Rotation = rotation;
 
         HealthScript? health = enemy.health;
         if (health != null && !health.dead && hp > 0 && hp <= Mathf.Max(maxHp, 1))
@@ -178,11 +192,80 @@ internal static class EnemySync
             try
             {
                 animator.speed = speed > 0.01f ? speed : 1.0f;
-                animator.Play(stateHash, 0, normalizedTime);
+
+                // Only restart the clip when the state actually changed. Calling
+                // Play with the host's normalized time on every packet reset the
+                // animation several times a second, which is why the mirrored
+                // NPCs looked like they had no animation at all.
+                AnimatorStateInfo current = animator.GetCurrentAnimatorStateInfo(0);
+                bool sameState = current.fullPathHash == stateHash;
+                bool drifted =
+                    Mathf.Abs(
+                        Mathf.Repeat(current.normalizedTime, 1.0f) -
+                        Mathf.Repeat(normalizedTime, 1.0f)
+                    ) > 0.25f;
+
+                if (!sameState || drifted)
+                {
+                    animator.Play(stateHash, 0, normalizedTime);
+                }
             }
             catch (Exception)
             {
                 // Animator hash from a different controller revision; ignore.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Per-frame easing for mirrored actors. Runs in LateUpdate so the smoothed
+    /// transform is what the frame renders.
+    /// </summary>
+    public static void LateTick()
+    {
+        if (CoopPlugin.Settings.Role != CoopRole.Client || !Enabled || Targets.Count == 0)
+        {
+            return;
+        }
+
+        float deltaTime = Time.deltaTime;
+        if (deltaTime <= 0.0f)
+        {
+            return;
+        }
+
+        // Exponential smoothing with roughly a 70 ms time constant: fast enough
+        // to track the host, slow enough to hide the 0.15 s packet interval.
+        float blend = 1.0f - Mathf.Exp(-14.0f * deltaTime);
+
+        foreach (KeyValuePair<string, MirrorTarget> pair in Targets)
+        {
+            EnemyController? enemy = Find(pair.Key);
+            if (enemy == null || enemy.gameObject == null)
+            {
+                continue;
+            }
+
+            MirrorTarget target = pair.Value;
+            try
+            {
+                Transform transform = enemy.transform;
+                if (target.Snap)
+                {
+                    // First snapshot for this actor: jump straight to it so a
+                    // newly mirrored NPC does not slide across the level.
+                    target.Snap = false;
+                    transform.position = target.Position;
+                    transform.rotation = target.Rotation;
+                    continue;
+                }
+
+                transform.position = Vector3.Lerp(transform.position, target.Position, blend);
+                transform.rotation = Quaternion.Slerp(transform.rotation, target.Rotation, blend);
+            }
+            catch (Exception)
+            {
+                // Transform writes are best-effort; never break the local frame.
             }
         }
     }
@@ -233,6 +316,7 @@ internal static class EnemySync
         KnownEnemies.Clear();
         EnemyIds.Clear();
         LastMirror.Clear();
+        Targets.Clear();
         AnnouncedDead.Clear();
         FrozenIds.Clear();
         _firstPoll = true;
@@ -299,6 +383,7 @@ internal static class EnemySync
             KnownEnemies.Remove(key);
             EnemyIds.Remove(key);
             LastMirror.Remove(key);
+            Targets.Remove(key);
         }
     }
 

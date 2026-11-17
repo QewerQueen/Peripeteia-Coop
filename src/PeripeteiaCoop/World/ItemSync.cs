@@ -634,7 +634,7 @@ internal static class ItemSync
             {
                 TrySpawnDropped(key, position, rotation, itemName, templateName);
             }
-            else if (CoopPlugin.ProbeEnabled)
+            else
             {
                 CoopPlugin.LogSource.LogInfo(
                     $"[items] drop for unknown key '{key}' item='{itemName}' " +
@@ -710,7 +710,8 @@ internal static class ItemSync
             SeenActiveKeys.Add(key);
 
             CoopPlugin.LogSource.LogInfo(
-                $"[items] spawned dropped item '{itemName}' for key '{key}'."
+                $"[items] spawned dropped item '{itemName}' for key '{key}' " +
+                $"from template '{template.gameObject.name}'."
             );
         }
         catch (Exception exception)
@@ -724,31 +725,50 @@ internal static class ItemSync
     private static ItemInfo? FindSpawnTemplate(string itemName, string templateName)
     {
         string wantedTemplate = StripCloneSuffix(templateName);
-        ItemInfo? fallback = null;
+
+        // Prefer an exact ItemName match: it is the logical item ("Makarov"),
+        // independent of the scene object's name and sibling index. Objects the
+        // local player or an NPC is holding are skipped so a drop cannot clone
+        // something that is already in someone's hands.
+        ItemInfo? nameFallback = null;
+        ItemInfo? heldFallback = null;
 
         foreach (ItemInfo candidate in Resources.FindObjectsOfTypeAll<ItemInfo>())
         {
-            if (candidate == null || candidate.gameObject == null || IsHeldOrNpcItem(candidate))
+            if (candidate == null || candidate.gameObject == null)
             {
                 continue;
             }
 
-            string objectName = StripCloneSuffix(candidate.gameObject.name);
-            if (!string.IsNullOrEmpty(wantedTemplate) &&
-                string.Equals(objectName, wantedTemplate, StringComparison.Ordinal))
+            bool matchesItem = !string.IsNullOrEmpty(itemName) &&
+                string.Equals(candidate.ItemName, itemName, StringComparison.Ordinal);
+            bool matchesName = !string.IsNullOrEmpty(wantedTemplate) &&
+                string.Equals(
+                    StripCloneSuffix(candidate.gameObject.name),
+                    wantedTemplate,
+                    StringComparison.Ordinal
+                );
+
+            if (!matchesItem && !matchesName)
+            {
+                continue;
+            }
+
+            if (IsHeldOrNpcItem(candidate))
+            {
+                heldFallback ??= candidate;
+                continue;
+            }
+
+            if (matchesItem)
             {
                 return candidate;
             }
 
-            if (fallback == null &&
-                !string.IsNullOrEmpty(itemName) &&
-                string.Equals(candidate.ItemName, itemName, StringComparison.Ordinal))
-            {
-                fallback = candidate;
-            }
+            nameFallback ??= candidate;
         }
 
-        return fallback;
+        return nameFallback ?? heldFallback;
     }
 
     private static string StripCloneSuffix(string name)

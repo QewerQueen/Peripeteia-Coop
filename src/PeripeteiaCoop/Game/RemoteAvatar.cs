@@ -109,6 +109,7 @@ internal sealed class RemoteAvatar
     private readonly List<int> _ragdollOriginalLayers = new();
     private readonly List<string> _ragdollInfo = new();
     private int _ragdollLayer = -1;
+    private int _ragdollProbeLayer = -1;
     private bool _dead;
     private bool _ragdollActive;
 
@@ -1902,7 +1903,7 @@ internal sealed class RemoteAvatar
                 bodies++;
             }
 
-            int layer = _ragdollLayer >= 0 ? _ragdollLayer : 0;
+            int layer = ResolveRagdollLayer(position);
             foreach (Collider collider in _ragdollColliders)
             {
                 if (collider != null)
@@ -1922,6 +1923,11 @@ internal sealed class RemoteAvatar
                     joints++;
                 }
             }
+
+            CoopPlugin.LogSource.LogInfo(
+                $"[death] ragdoll layer for remote {Id}: {layer}({LayerName(layer)}) " +
+                $"(probe={LayerName(_ragdollProbeLayer)})."
+            );
         }
         catch (Exception exception)
         {
@@ -1933,8 +1939,72 @@ internal sealed class RemoteAvatar
 
         CoopPlugin.LogSource.LogInfo(
             $"[death] remote {Id} is down (ragdoll bodies={bodies}, colliders={colliders}, " +
-            $"joints={joints}, layer={_ragdollLayer})."
+            $"joints={joints})."
         );
+    }
+
+    /// <summary>
+    /// Picks a physics layer for the ragdoll colliders. The baked hitboxes live
+    /// on a layer that only interacts with damage, so a body built from them
+    /// falls through the level. The surface the body is lying on always collides
+    /// with the world, so its layer is the safe choice; Default is the fallback.
+    /// </summary>
+    private int ResolveRagdollLayer(Vector3 position)
+    {
+        _ragdollProbeLayer = -1;
+        try
+        {
+            // Identify the ragdoll's own colliders so the probe cannot report the
+            // body itself as the floor.
+            var own = new HashSet<int>();
+            foreach (Collider collider in _ragdollColliders)
+            {
+                if (collider != null)
+                {
+                    own.Add(collider.GetInstanceID());
+                }
+            }
+
+            // Ignore Raycast (the player's own layer) is excluded from the
+            // default raycast mask, so this hits the surface under the body.
+            RaycastHit[] hits = Physics.RaycastAll(
+                position + Vector3.up * 0.4f,
+                Vector3.down,
+                8.0f
+            );
+
+            foreach (RaycastHit hit in hits)
+            {
+                if (hit.collider == null || own.Contains(hit.collider.GetInstanceID()))
+                {
+                    continue;
+                }
+
+                int layer = hit.collider.gameObject.layer;
+                _ragdollProbeLayer = layer;
+                if (!Physics.GetIgnoreLayerCollision(layer, layer))
+                {
+                    return layer;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Fall through to the default layer.
+        }
+
+        return 0;
+    }
+
+    private static string LayerName(int layer)
+    {
+        if (layer < 0 || layer > 31)
+        {
+            return "<none>";
+        }
+
+        string name = LayerMask.LayerToName(layer);
+        return string.IsNullOrEmpty(name) ? "<unnamed>" : name;
     }
 
     private void ExitRagdoll()
@@ -2113,19 +2183,40 @@ internal sealed class RemoteAvatar
         CoopPlugin.LogSource.LogInfo(
             $"[death] ragdoll rig for remote {Id}: bodies={_ragdollBodies.Count}, " +
             $"colliders={_ragdollColliders.Count}, joints={_ragdollJoints.Count}, " +
-            $"colliderLayers=[{string.Join(",", _ragdollOriginalLayers)}], " +
-            $"playerLayer={_ragdollLayer}, hitboxLayers={DescribeHitboxLayers(clone)}."
+            $"colliderLayers=[{DescribeLayers(_ragdollOriginalLayers)}], " +
+            $"playerLayer={_ragdollLayer}({LayerName(_ragdollLayer)}), " +
+            $"hitboxLayers={DescribeHitboxLayers(clone)}."
         );
         CoopPlugin.LogSource.LogInfo(
             $"[death] ragdoll colliders for remote {Id}: {string.Join(" | ", _ragdollInfo)}"
         );
-        if (_ragdollLayer >= 0)
+        CoopPlugin.LogSource.LogInfo($"[death] layers: {DescribeAllLayers()}");
+    }
+
+    private static string DescribeLayers(List<int> layers)
+    {
+        var names = new List<string>(layers.Count);
+        foreach (int layer in layers)
         {
-            CoopPlugin.LogSource.LogInfo(
-                $"[death] ragdoll layer {_ragdollLayer} vs default: " +
-                $"ignore={Physics.GetIgnoreLayerCollision(_ragdollLayer, 0)}."
-            );
+            names.Add($"{layer}({LayerName(layer)})");
         }
+
+        return string.Join(",", names);
+    }
+
+    private static string DescribeAllLayers()
+    {
+        var parts = new List<string>(32);
+        for (int layer = 0; layer < 32; layer++)
+        {
+            string name = LayerMask.LayerToName(layer);
+            if (!string.IsNullOrEmpty(name))
+            {
+                parts.Add($"{layer}={name}");
+            }
+        }
+
+        return string.Join(" ", parts);
     }
 
     /// <summary>

@@ -39,6 +39,7 @@ internal static class StorySync
     private static readonly Dictionary<string, GameObject> ObjectsByKey = new();
 
     private static string _scene = string.Empty;
+    private static PlayerMovement? _localPlayer;
     private static bool _walkInTeleport;
     private static int _eventsSent;
     private static int _eventsApplied;
@@ -65,6 +66,7 @@ internal static class StorySync
             return;
         }
 
+        _localPlayer = localPlayer;
         EnsureScene();
     }
 
@@ -88,7 +90,65 @@ internal static class StorySync
             return true;
         }
 
+        // The host registers the remote avatar as an AI target, so its friendly
+        // NPCs would start talking for the client and consume the branch before
+        // the client ever reaches the NPC. Only the player actually standing at
+        // the NPC may start the conversation.
+        if (!LocalPlayerIsNearest(conversation.transform))
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[story] dialogue '{key}' triggered for the other player; ignoring."
+            );
+            return true;
+        }
+
         return false;
+    }
+
+    /// <summary>
+    /// True when the local player is at least as close to the NPC as any remote
+    /// player. Used to keep a remote avatar from starting a conversation that
+    /// belongs to whoever walked up to the NPC.
+    /// </summary>
+    private static bool LocalPlayerIsNearest(Transform npc)
+    {
+        Transform? local = _localPlayer != null ? _localPlayer.transform : null;
+        if (local == null)
+        {
+            return true;
+        }
+
+        CoopNetwork? network = CoopPlugin.Network;
+        if (network == null)
+        {
+            return true;
+        }
+
+        float localDistance = Vector3.Distance(local.position, npc.position);
+        float nearestRemote = float.MaxValue;
+
+        foreach (int id in network.RemotePlayerIds())
+        {
+            Transform? root = network.GetAvatarRoot(id);
+            if (root == null)
+            {
+                continue;
+            }
+
+            float distance = Vector3.Distance(root.position, npc.position);
+            if (distance < nearestRemote)
+            {
+                nearestRemote = distance;
+            }
+        }
+
+        if (nearestRemote == float.MaxValue)
+        {
+            return true;
+        }
+
+        // Half a metre of slack so a tie still resolves to the local player.
+        return localDistance <= nearestRemote + 0.5f;
     }
 
     public static void OnDialogueStarted(NPCConversation conversation)
@@ -303,7 +363,8 @@ internal static class StorySync
 
     /// <summary>
     /// Finds the cutsceneplayer that owns a video. It is not always on the same
-    /// GameObject as the VideoPlayer, so the parents are checked too.
+    /// GameObject as the VideoPlayer (or one of its parents), so as a last resort
+    /// every cutsceneplayer is scanned for one that references this VideoPlayer.
     /// </summary>
     private static cutsceneplayer? FindCutscene(GameObject go)
     {
@@ -315,12 +376,43 @@ internal static class StorySync
                 return direct;
             }
 
-            return go.GetComponentInParent<cutsceneplayer>();
+            cutsceneplayer? parent = go.GetComponentInParent<cutsceneplayer>();
+            if (parent != null)
+            {
+                return parent;
+            }
+
+            VideoPlayer? player = go.GetComponent<VideoPlayer>();
+            if (player == null)
+            {
+                player = go.GetComponentInParent<VideoPlayer>();
+            }
+
+            if (player == null)
+            {
+                return null;
+            }
+
+            int instanceId = player.GetInstanceID();
+            foreach (cutsceneplayer candidate in Resources.FindObjectsOfTypeAll<cutsceneplayer>())
+            {
+                if (candidate == null || candidate.vp == null)
+                {
+                    continue;
+                }
+
+                if (candidate.vp.GetInstanceID() == instanceId)
+                {
+                    return candidate;
+                }
+            }
         }
         catch (Exception)
         {
-            return null;
+            // Fall through to no cutscene.
         }
+
+        return null;
     }
 
     private static void PlayRemoteCutscene(string key)
@@ -747,6 +839,28 @@ internal static class StorySync
         return WorldEffectTypes.Contains(typeName);
     }
 
+    // Listeners that hand supplies to the player. Replaying these is what gives
+    // the teammate the same starting weapons and equipment the first player
+    // received. Gated behind Story.ShareItemRewards because it can duplicate a
+    // unique quest item.
+    private static readonly HashSet<string> ItemRewardTypes = new(StringComparer.Ordinal)
+    {
+        "ItemInfo",
+        "GiftGiver",
+    };
+
+    private static bool IsItemRewardEffect(string typeName, string method)
+    {
+        if (!CoopPlugin.StoryShareItemRewards || !ItemRewardTypes.Contains(typeName))
+        {
+            return false;
+        }
+
+        return string.Equals(method, "pickupitem", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(method, "GiveAllGifts", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(method, "GiveGiftAtIndex", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// Resolves a readable component type name for a persistent listener.
     /// <c>PersistentCall.targetAssemblyTypeName</c> is the serialized
@@ -901,7 +1015,9 @@ internal static class StorySync
             }
 
             string typeName = ShortTypeName(call.targetAssemblyTypeName, target);
-            if (!IsWorldEffect(typeName, method))
+            bool worldEffect = IsWorldEffect(typeName, method);
+            bool itemReward = !worldEffect && IsItemRewardEffect(typeName, method);
+            if (!worldEffect && !itemReward)
             {
                 CoopPlugin.LogSource.LogInfo(
                     $"[story] quest '{key}': skipping non-world effect " +
@@ -922,7 +1038,14 @@ internal static class StorySync
                 _ => Array.Empty<object?>(),
             };
 
-            InvokeEffect(target, typeName, method, arguments, key);
+            InvokeEffect(
+                target,
+                typeName,
+                method,
+                arguments,
+                key,
+                itemReward ? "item reward" : "world effect"
+            );
         }
     }
 
@@ -931,7 +1054,8 @@ internal static class StorySync
         string typeName,
         string method,
         object?[] arguments,
-        string key
+        string key,
+        string label
     )
     {
         try
@@ -957,7 +1081,7 @@ internal static class StorySync
                 go.SetActive(active);
                 _effectsApplied++;
                 CoopPlugin.LogSource.LogInfo(
-                    $"[story] quest '{key}': applied world effect '{typeName}.SetActive({active})'."
+                    $"[story] quest '{key}': applied {label} '{typeName}.SetActive({active})'."
                 );
                 return;
             }
@@ -991,7 +1115,7 @@ internal static class StorySync
 
             _effectsApplied++;
             CoopPlugin.LogSource.LogInfo(
-                $"[story] quest '{key}': applied world effect '{typeName}.{method}'."
+                $"[story] quest '{key}': applied {label} '{typeName}.{method}'."
             );
         }
         catch (Exception exception)

@@ -1822,6 +1822,8 @@ internal sealed class CoopNetwork : IDisposable
         {
             avatar.ApplyLatePose();
         }
+
+        EnemySync.LateTick();
     }
 
     private RemoteAvatar EnsureAvatar(int id, string name)
