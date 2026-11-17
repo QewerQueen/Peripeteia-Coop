@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Text;
 using HarmonyLib;
+using Il2CppInterop.Runtime;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.SceneManagement;
@@ -46,6 +46,7 @@ internal static class StorySync
     private static bool _suppressBroadcast;
     private static string _lastCutsceneKey = string.Empty;
     private static float _lastCutsceneTime;
+    private static float _lastCutsceneProbe;
     private static string _lastActionSignature = string.Empty;
     private static float _lastActionTime;
 
@@ -266,18 +267,17 @@ internal static class StorySync
             return;
         }
 
-        cutsceneplayer? cutscene = null;
-        try
-        {
-            cutscene = player.GetComponent<cutsceneplayer>();
-        }
-        catch (Exception)
-        {
-            return;
-        }
-
+        cutsceneplayer? cutscene = FindCutscene(player.gameObject);
         if (cutscene == null)
         {
+            if (Time.unscaledTime - _lastCutsceneProbe > 2.0f)
+            {
+                _lastCutsceneProbe = Time.unscaledTime;
+                CoopPlugin.LogSource.LogInfo(
+                    $"[story] video '{player.gameObject.name}' has no cutsceneplayer nearby; not shared."
+                );
+            }
+
             return;
         }
 
@@ -301,6 +301,28 @@ internal static class StorySync
         );
     }
 
+    /// <summary>
+    /// Finds the cutsceneplayer that owns a video. It is not always on the same
+    /// GameObject as the VideoPlayer, so the parents are checked too.
+    /// </summary>
+    private static cutsceneplayer? FindCutscene(GameObject go)
+    {
+        try
+        {
+            cutsceneplayer? direct = go.GetComponent<cutsceneplayer>();
+            if (direct != null)
+            {
+                return direct;
+            }
+
+            return go.GetComponentInParent<cutsceneplayer>();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     private static void PlayRemoteCutscene(string key)
     {
         GameObject? target = FindObject(key);
@@ -311,7 +333,7 @@ internal static class StorySync
 
         try
         {
-            cutsceneplayer? cutscene = target.GetComponent<cutsceneplayer>();
+            cutsceneplayer? cutscene = FindCutscene(target);
             VideoPlayer? player = cutscene != null ? cutscene.vp : null;
             if (player == null)
             {
@@ -672,6 +694,7 @@ internal static class StorySync
         "doorScript",
         "moveuptimes",
         "elevator",
+        "hind",
         "Triggerer",
         "triggeronbuild",
         "EnemyDoorTrigger",
@@ -684,10 +707,32 @@ internal static class StorySync
         "trainnode",
     };
 
+    // Method names that are unambiguously a world change no matter which
+    // component holds them. This is a safety net for the case where the
+    // target's assembly type name is missing: GetType() on an Il2CppInterop
+    // wrapper often reports the declared field type ("Object") instead of the
+    // real component ("elevator"), which used to make the door button look
+    // like a non-world effect.
+    private static readonly HashSet<string> WorldEffectMethods = new(StringComparer.Ordinal)
+    {
+        "selectFloor",
+        "teleporttofloor",
+        "BeginUp",
+        "stopup",
+        "OpenDoor",
+        "OpenStealth",
+        "DestroyDoor",
+    };
+
     private static bool IsWorldEffect(string typeName, string method)
     {
         // Toggling a plain GameObject is always a world change.
         if (string.Equals(method, "SetActive", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (WorldEffectMethods.Contains(method))
         {
             return true;
         }
@@ -700,6 +745,32 @@ internal static class StorySync
         }
 
         return WorldEffectTypes.Contains(typeName);
+    }
+
+    /// <summary>
+    /// Resolves a readable component type name for a persistent listener.
+    /// <c>PersistentCall.targetAssemblyTypeName</c> is the serialized
+    /// "Namespace.Type, Assembly" of the real target and is reliable, unlike
+    /// <c>target.GetType()</c> which Il2CppInterop can report as the base
+    /// declared type.
+    /// </summary>
+    private static string ShortTypeName(string? assemblyTypeName, UnityEngine.Object? target)
+    {
+        string full = assemblyTypeName ?? string.Empty;
+        int comma = full.IndexOf(',');
+        if (comma >= 0)
+        {
+            full = full.Substring(0, comma);
+        }
+
+        full = full.Trim();
+        if (full.Length > 0)
+        {
+            int dot = full.LastIndexOf('.');
+            return dot >= 0 ? full.Substring(dot + 1) : full;
+        }
+
+        return target != null ? target.GetType().Name : string.Empty;
     }
 
     /// <summary>
@@ -741,10 +812,10 @@ internal static class StorySync
                     }
 
                     UnityEngine.Object? target = call.target;
-                    string typeName = target != null ? target.GetType().Name : "<null>";
+                    string typeName = ShortTypeName(call.targetAssemblyTypeName, target);
                     CoopPlugin.LogSource.LogInfo(
                         $"[story] quest trigger[{i}].assign -> {typeName}.{call.methodName} " +
-                        $"(mode={(int)call.mode})."
+                        $"(mode={(int)call.mode}, target='{call.targetAssemblyTypeName}')."
                     );
                 }
             }
@@ -829,7 +900,7 @@ internal static class StorySync
                 continue;
             }
 
-            string typeName = target.GetType().Name;
+            string typeName = ShortTypeName(call.targetAssemblyTypeName, target);
             if (!IsWorldEffect(typeName, method))
             {
                 CoopPlugin.LogSource.LogInfo(
@@ -865,34 +936,59 @@ internal static class StorySync
     {
         try
         {
-            MethodInfo? info = null;
-            foreach (MethodInfo candidate in target.GetType().GetMethods(
-                         BindingFlags.Public | BindingFlags.Instance))
-            {
-                if (!string.Equals(candidate.Name, method, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (candidate.GetParameters().Length != arguments.Length)
-                {
-                    continue;
-                }
-
-                info = candidate;
-                break;
-            }
-
-            if (info == null)
+            // Il2CppInterop hands back the declared field type (UnityEngine.Object)
+            // for a persistent call target, so target.GetType() cannot be used to
+            // find the real method by reflection. SendMessage resolves the method
+            // on the actual component instead, which is why the world effects are
+            // limited to MonoBehaviours (all of the whitelisted types are).
+            GameObject? go = AsGameObject(target);
+            if (go == null)
             {
                 CoopPlugin.LogSource.LogWarning(
-                    $"[story] quest '{key}': no method '{typeName}.{method}' " +
-                    $"with {arguments.Length} argument(s)."
+                    $"[story] quest '{key}': cannot resolve target '{typeName}' " +
+                    $"for '{method}'."
                 );
                 return;
             }
 
-            info.Invoke(target, arguments);
+            if (string.Equals(method, "SetActive", StringComparison.Ordinal))
+            {
+                bool active = arguments.Length > 0 && arguments[0] is bool flag && flag;
+                go.SetActive(active);
+                _effectsApplied++;
+                CoopPlugin.LogSource.LogInfo(
+                    $"[story] quest '{key}': applied world effect '{typeName}.SetActive({active})'."
+                );
+                return;
+            }
+
+            if (arguments.Length == 0)
+            {
+                go.SendMessage(method, SendMessageOptions.DontRequireReceiver);
+            }
+            else if (arguments.Length == 1)
+            {
+                Il2CppSystem.Object? boxed = BoxArgument(arguments[0]);
+                if (boxed == null)
+                {
+                    CoopPlugin.LogSource.LogWarning(
+                        $"[story] quest '{key}': cannot box argument for " +
+                        $"'{typeName}.{method}'."
+                    );
+                    return;
+                }
+
+                go.SendMessage(method, boxed, SendMessageOptions.DontRequireReceiver);
+            }
+            else
+            {
+                CoopPlugin.LogSource.LogWarning(
+                    $"[story] quest '{key}': '{typeName}.{method}' takes " +
+                    $"{arguments.Length} arguments; cannot replay."
+                );
+                return;
+            }
+
             _effectsApplied++;
             CoopPlugin.LogSource.LogInfo(
                 $"[story] quest '{key}': applied world effect '{typeName}.{method}'."
@@ -904,6 +1000,92 @@ internal static class StorySync
                 $"[story] quest '{key}': effect '{typeName}.{method}' failed: " +
                 $"{exception.GetType().Name}: {exception.Message}"
             );
+        }
+    }
+
+    /// <summary>
+    /// Resolves the GameObject a persistent-call target belongs to, even when
+    /// Il2CppInterop only exposes the base <see cref="UnityEngine.Object"/>
+    /// wrapper.
+    /// </summary>
+    private static GameObject? AsGameObject(UnityEngine.Object target)
+    {
+        try
+        {
+            GameObject? go = target.TryCast<GameObject>();
+            if (go != null)
+            {
+                return go;
+            }
+        }
+        catch (Exception)
+        {
+            // Fall through to the component path.
+        }
+
+        try
+        {
+            Component? component = target.TryCast<Component>();
+            if (component != null)
+            {
+                return component.gameObject;
+            }
+        }
+        catch (Exception)
+        {
+            // Fall through.
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Boxes a decoded UnityEvent argument into the Il2Cpp object the
+    /// <c>SendMessage</c> overload expects.
+    /// </summary>
+    private static Il2CppSystem.Object? BoxArgument(object? value)
+    {
+        switch (value)
+        {
+            case null:
+                return null;
+            case int i:
+                return i;
+            case float f:
+                return f;
+            case bool b:
+                return b;
+            case string s:
+                return s;
+            case double d:
+                return d;
+            case uint u:
+                return u;
+            case long l:
+                return l;
+            case ulong ul:
+                return ul;
+            case short sh:
+                return sh;
+            case ushort ush:
+                return ush;
+            case byte by:
+                return by;
+            case sbyte sb:
+                return sb;
+            case char c:
+                return c;
+            case UnityEngine.Object o:
+                try
+                {
+                    return o.Cast<Il2CppSystem.Object>();
+                }
+                catch (Exception)
+                {
+                    return null;
+                }
+            default:
+                return null;
         }
     }
 

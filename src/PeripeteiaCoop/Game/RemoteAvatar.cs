@@ -106,6 +106,9 @@ internal sealed class RemoteAvatar
     private readonly List<Rigidbody> _ragdollBodies = new();
     private readonly List<Collider> _ragdollColliders = new();
     private readonly List<CharacterJoint> _ragdollJoints = new();
+    private readonly List<int> _ragdollOriginalLayers = new();
+    private readonly List<string> _ragdollInfo = new();
+    private int _ragdollLayer = -1;
     private bool _dead;
     private bool _ragdollActive;
 
@@ -1899,11 +1902,15 @@ internal sealed class RemoteAvatar
                 bodies++;
             }
 
+            int layer = _ragdollLayer >= 0 ? _ragdollLayer : 0;
             foreach (Collider collider in _ragdollColliders)
             {
                 if (collider != null)
                 {
+                    EnsureActive(collider.gameObject);
                     collider.enabled = true;
+                    collider.isTrigger = false;
+                    collider.gameObject.layer = layer;
                     colliders++;
                 }
             }
@@ -1925,7 +1932,8 @@ internal sealed class RemoteAvatar
         }
 
         CoopPlugin.LogSource.LogInfo(
-            $"[death] remote {Id} is down (ragdoll bodies={bodies}, colliders={colliders}, joints={joints})."
+            $"[death] remote {Id} is down (ragdoll bodies={bodies}, colliders={colliders}, " +
+            $"joints={joints}, layer={_ragdollLayer})."
         );
     }
 
@@ -1954,11 +1962,16 @@ internal sealed class RemoteAvatar
                 body.detectCollisions = false;
             }
 
-            foreach (Collider collider in _ragdollColliders)
+            for (int i = 0; i < _ragdollColliders.Count; i++)
             {
+                Collider? collider = _ragdollColliders[i];
                 if (collider != null)
                 {
                     collider.enabled = false;
+                    if (i < _ragdollOriginalLayers.Count)
+                    {
+                        collider.gameObject.layer = _ragdollOriginalLayers[i];
+                    }
                 }
             }
         }
@@ -1980,6 +1993,36 @@ internal sealed class RemoteAvatar
     }
 
     /// <summary>
+    /// Makes sure a ragdoll collider's GameObject is live in the hierarchy,
+    /// walking up to (but not past) the avatar root. Some baked hitboxes live
+    /// under objects the game disables outside of a real ragdoll.
+    /// </summary>
+    private void EnsureActive(GameObject go)
+    {
+        try
+        {
+            if (go.activeInHierarchy)
+            {
+                return;
+            }
+
+            go.SetActive(true);
+            Transform? parent = go.transform.parent;
+            while (parent != null &&
+                   parent != Root.transform &&
+                   !parent.gameObject.activeInHierarchy)
+            {
+                parent.gameObject.SetActive(true);
+                parent = parent.parent;
+            }
+        }
+        catch (Exception)
+        {
+            // Best effort only.
+        }
+    }
+
+    /// <summary>
     /// Finds the baked ragdoll rig on the freshly cloned model and makes it
     /// inert. Must run before the hitbox scripts and colliders are stripped.
     /// </summary>
@@ -1988,6 +2031,14 @@ internal sealed class RemoteAvatar
         _ragdollBodies.Clear();
         _ragdollColliders.Clear();
         _ragdollJoints.Clear();
+        _ragdollOriginalLayers.Clear();
+        _ragdollInfo.Clear();
+
+        // The hitbox colliders sit on a layer that only interacts with damage
+        // rays, so a ragdoll built from them would fall straight through the
+        // level. The player's own layer does collide with the world, so the
+        // ragdoll is moved onto it while the body is down.
+        _ragdollLayer = clone.layer;
 
         try
         {
@@ -2004,6 +2055,12 @@ internal sealed class RemoteAvatar
                     if (collider != null && !_ragdollColliders.Contains(collider))
                     {
                         _ragdollColliders.Add(collider);
+                        _ragdollOriginalLayers.Add(collider.gameObject.layer);
+                        _ragdollInfo.Add(
+                            $"{go.name}/{collider.GetType().Name}:layer={collider.gameObject.layer}," +
+                            $"trigger={collider.isTrigger},enabled={collider.enabled}," +
+                            $"active={collider.gameObject.activeInHierarchy}"
+                        );
                     }
                 }
 
@@ -2055,8 +2112,45 @@ internal sealed class RemoteAvatar
 
         CoopPlugin.LogSource.LogInfo(
             $"[death] ragdoll rig for remote {Id}: bodies={_ragdollBodies.Count}, " +
-            $"colliders={_ragdollColliders.Count}, joints={_ragdollJoints.Count}."
+            $"colliders={_ragdollColliders.Count}, joints={_ragdollJoints.Count}, " +
+            $"colliderLayers=[{string.Join(",", _ragdollOriginalLayers)}], " +
+            $"playerLayer={_ragdollLayer}, hitboxLayers={DescribeHitboxLayers(clone)}."
         );
+        CoopPlugin.LogSource.LogInfo(
+            $"[death] ragdoll colliders for remote {Id}: {string.Join(" | ", _ragdollInfo)}"
+        );
+        if (_ragdollLayer >= 0)
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[death] ragdoll layer {_ragdollLayer} vs default: " +
+                $"ignore={Physics.GetIgnoreLayerCollision(_ragdollLayer, 0)}."
+            );
+        }
+    }
+
+    /// <summary>
+    /// Reports the layers the game's own ragdoll switches between, for
+    /// diagnostics: the baked hitboxes only collide with the world once the
+    /// game's HitBoxes.Ragroll moves them off these layers.
+    /// </summary>
+    private static string DescribeHitboxLayers(GameObject clone)
+    {
+        try
+        {
+            HitBoxes? hitBoxes = clone.GetComponent<HitBoxes>();
+            if (hitBoxes == null)
+            {
+                return "<none>";
+            }
+
+            return $"starting={hitBoxes.startingLayer.value}," +
+                $"default={hitBoxes.defaultLayer.value}," +
+                $"gore={hitBoxes.goreLayer.value}";
+        }
+        catch (Exception exception)
+        {
+            return $"<{exception.GetType().Name}>";
+        }
     }
 
     /// <summary>
@@ -2143,6 +2237,8 @@ internal sealed class RemoteAvatar
         _ragdollBodies.Clear();
         _ragdollColliders.Clear();
         _ragdollJoints.Clear();
+        _ragdollOriginalLayers.Clear();
+        _ragdollInfo.Clear();
         if (Root != null)
         {
             UnityEngine.Object.Destroy(Root);

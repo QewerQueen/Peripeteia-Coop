@@ -196,12 +196,13 @@ BepInEx/LogOutput.1.log
 [ai] remote player 1 registered as a target on '...'
 [story] dialogue consumed: '...'
 [story] applied remote QuestAction '...' (objects=2)
-[story] quest trigger[0].assign -> moveuptimes.BeginUp (mode=1)
-[story] replayed world effect moveuptimes.BeginUp on '...'
+[story] quest trigger[0].assign -> elevator.selectFloor (mode=3, target='elevator, Assembly-CSharp')
+[story] quest '...': applied world effect 'elevator.selectFloor'.
 [story] cutscene '...' broadcast to the other player.
 [story] dialogue effect '....SetQuestLog(3)' shared with the other player.
 [death] local player died at (x, y, z).
-[death] ragdoll rig for remote 1: bodies=14, colliders=14, joints=13.
+[death] ragdoll rig for remote 1: bodies=14, colliders=14, joints=13, colliderLayers=[9,9,...], playerLayer=3, hitboxLayers=starting=256,default=512,gore=1024.
+[death] remote 1 is down (ragdoll bodies=14, colliders=14, joints=13, layer=3).
 [death] remote 1 is back up.
 [net] ... poses: 1@(x,y,z)
 ```
