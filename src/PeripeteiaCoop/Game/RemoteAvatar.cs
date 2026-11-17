@@ -100,6 +100,15 @@ internal sealed class RemoteAvatar
     private int _appliedActionHash;
     private float _appliedActionTime;
 
+    // The player model ships with a baked hitbox ragdoll (Rigidbody + Collider +
+    // CharacterJoint per limb). The clone keeps that rig but inert so a remote
+    // death can collapse the body. See CollectRagdollRig / EnterRagdoll.
+    private readonly List<Rigidbody> _ragdollBodies = new();
+    private readonly List<Collider> _ragdollColliders = new();
+    private readonly List<CharacterJoint> _ragdollJoints = new();
+    private bool _dead;
+    private bool _ragdollActive;
+
     private enum BoneRole
     {
         Hips,
@@ -163,6 +172,9 @@ internal sealed class RemoteAvatar
     public float TargetYaw { get; set; }
 
     public bool HasPose { get; private set; }
+
+    /// <summary>True while the remote player is dead and the body is down.</summary>
+    public bool IsDead => _dead;
 
     /// <summary>
     /// True after the remote player has touched the ground at least once in
@@ -331,6 +343,14 @@ internal sealed class RemoteAvatar
             CoopPlugin.LogSource.LogInfo(
                 $"[avatar] rebuilt avatar id={Id} for scene='{sceneName}'."
             );
+
+            // A rebuilt model gets a fresh, inert ragdoll rig. If the remote
+            // player is dead, put the new body back down.
+            if (_dead)
+            {
+                _dead = false;
+                SetDead(true, Root.transform.position, Root.transform.rotation);
+            }
         }
         catch (Exception exception)
         {
@@ -507,7 +527,7 @@ internal sealed class RemoteAvatar
     /// </summary>
     public void ApplyLatePose()
     {
-        if (Root == null || !Root.activeInHierarchy)
+        if (Root == null || !Root.activeInHierarchy || _dead)
         {
             return;
         }
@@ -1801,6 +1821,290 @@ internal sealed class RemoteAvatar
         }
     }
 
+    /// <summary>
+    /// Applies the remote player's alive/dead state. On death the Animator is
+    /// stopped and the baked ragdoll rig is switched on so the body falls and
+    /// stays down; on revive the rig goes inert again and the Animator resumes.
+    /// </summary>
+    public void SetDead(bool dead, Vector3 position, Quaternion rotation)
+    {
+        if (Root == null)
+        {
+            _dead = dead;
+            return;
+        }
+
+        if (_dead == dead)
+        {
+            return;
+        }
+
+        _dead = dead;
+        if (dead)
+        {
+            EnterRagdoll(position, rotation);
+        }
+        else
+        {
+            ExitRagdoll();
+        }
+    }
+
+    private void EnterRagdoll(Vector3 position, Quaternion rotation)
+    {
+        if (_ragdollActive)
+        {
+            return;
+        }
+
+        _ragdollActive = true;
+        _position = position;
+        _yaw = rotation.eulerAngles.y;
+        Root.transform.position = position;
+        Root.transform.rotation = rotation;
+
+        if (_gameAnimator != null)
+        {
+            _gameAnimator.enabled = false;
+        }
+
+        // A dead body must not be lootable by the teammate.
+        EnsureNotSearchable(Root);
+
+        if (!CoopPlugin.PlayerDeathRagdoll)
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[death] remote {Id} died; ragdoll disabled, body frozen."
+            );
+            return;
+        }
+
+        int bodies = 0;
+        int colliders = 0;
+        int joints = 0;
+        try
+        {
+            foreach (Rigidbody body in _ragdollBodies)
+            {
+                if (body == null)
+                {
+                    continue;
+                }
+
+                body.velocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+                body.isKinematic = false;
+                body.useGravity = true;
+                body.detectCollisions = true;
+                bodies++;
+            }
+
+            foreach (Collider collider in _ragdollColliders)
+            {
+                if (collider != null)
+                {
+                    collider.enabled = true;
+                    colliders++;
+                }
+            }
+
+            foreach (CharacterJoint joint in _ragdollJoints)
+            {
+                if (joint != null)
+                {
+                    joints++;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] ragdoll failed for remote {Id}: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[death] remote {Id} is down (ragdoll bodies={bodies}, colliders={colliders}, joints={joints})."
+        );
+    }
+
+    private void ExitRagdoll()
+    {
+        if (!_ragdollActive)
+        {
+            return;
+        }
+
+        _ragdollActive = false;
+
+        try
+        {
+            foreach (Rigidbody body in _ragdollBodies)
+            {
+                if (body == null)
+                {
+                    continue;
+                }
+
+                body.velocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+                body.isKinematic = true;
+                body.useGravity = false;
+                body.detectCollisions = false;
+            }
+
+            foreach (Collider collider in _ragdollColliders)
+            {
+                if (collider != null)
+                {
+                    collider.enabled = false;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] ragdoll reset failed for remote {Id}: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+
+        if (_gameAnimator != null)
+        {
+            _gameAnimator.enabled = true;
+        }
+
+        Root.transform.rotation = Quaternion.Euler(0.0f, _yaw, 0.0f);
+        CoopPlugin.LogSource.LogInfo($"[death] remote {Id} is back up.");
+    }
+
+    /// <summary>
+    /// Finds the baked ragdoll rig on the freshly cloned model and makes it
+    /// inert. Must run before the hitbox scripts and colliders are stripped.
+    /// </summary>
+    private void CollectRagdollRig(GameObject clone)
+    {
+        _ragdollBodies.Clear();
+        _ragdollColliders.Clear();
+        _ragdollJoints.Clear();
+
+        try
+        {
+            void Collect(GameObject go)
+            {
+                Rigidbody? body = go.GetComponent<Rigidbody>();
+                if (body != null && !_ragdollBodies.Contains(body))
+                {
+                    _ragdollBodies.Add(body);
+                }
+
+                foreach (Collider collider in go.GetComponents<Collider>())
+                {
+                    if (collider != null && !_ragdollColliders.Contains(collider))
+                    {
+                        _ragdollColliders.Add(collider);
+                    }
+                }
+
+                foreach (CharacterJoint joint in go.GetComponents<CharacterJoint>())
+                {
+                    if (joint != null && !_ragdollJoints.Contains(joint))
+                    {
+                        _ragdollJoints.Add(joint);
+                    }
+                }
+            }
+
+            // The hitboxes name the ragdoll parts; the joints catch any holder
+            // that has no hitbox (for example the hip root).
+            foreach (HitBox hitBox in clone.GetComponentsInChildren<HitBox>(true))
+            {
+                if (hitBox != null)
+                {
+                    Collect(hitBox.gameObject);
+                }
+            }
+
+            foreach (CharacterJoint joint in clone.GetComponentsInChildren<CharacterJoint>(true))
+            {
+                if (joint != null)
+                {
+                    Collect(joint.gameObject);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] ragdoll rig scan failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+
+        foreach (Rigidbody body in _ragdollBodies)
+        {
+            body.isKinematic = true;
+            body.useGravity = false;
+            body.detectCollisions = false;
+        }
+
+        foreach (Collider collider in _ragdollColliders)
+        {
+            collider.enabled = false;
+        }
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[death] ragdoll rig for remote {Id}: bodies={_ragdollBodies.Count}, " +
+            $"colliders={_ragdollColliders.Count}, joints={_ragdollJoints.Count}."
+        );
+    }
+
+    /// <summary>
+    /// Guarantees the remote body can never be searched or looted. Looting is
+    /// driven by the game's <c>Interaction</c>/<c>container</c> components; the
+    /// clone is already stripped of every MonoBehaviour, and this removes any
+    /// that a runtime system might have added to the puppet.
+    /// </summary>
+    private static void EnsureNotSearchable(GameObject root)
+    {
+        int removed = 0;
+        try
+        {
+            removed += DestroyAll<Interaction>(root);
+            removed += DestroyAll<container>(root);
+            removed += DestroyAll<frob>(root);
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] loot guard failed: {exception.GetType().Name}: {exception.Message}"
+            );
+            return;
+        }
+
+        if (removed > 0)
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[death] removed {removed} loot/interaction component(s) from the remote body."
+            );
+        }
+    }
+
+    private static int DestroyAll<T>(GameObject root) where T : Component
+    {
+        int count = 0;
+        foreach (T component in root.GetComponentsInChildren<T>(true))
+        {
+            if (component != null)
+            {
+                UnityEngine.Object.DestroyImmediate(component, true);
+                count++;
+            }
+        }
+
+        return count;
+    }
+
     public void Update(float deltaTime)
     {
         if (Root == null)
@@ -1817,7 +2121,7 @@ internal sealed class RemoteAvatar
 
         // Some pause implementations disable animators or restore their update
         // mode. Keep the remote puppet independent from the local pause menu.
-        if (_gameAnimator != null && Time.timeScale <= 0.001f)
+        if (!_dead && _gameAnimator != null && Time.timeScale <= 0.001f)
         {
             if (!_gameAnimator.enabled)
             {
@@ -1836,6 +2140,9 @@ internal sealed class RemoteAvatar
     public void Destroy()
     {
         _hitProxy = null;
+        _ragdollBodies.Clear();
+        _ragdollColliders.Clear();
+        _ragdollJoints.Clear();
         if (Root != null)
         {
             UnityEngine.Object.Destroy(Root);
@@ -1902,6 +2209,11 @@ internal sealed class RemoteAvatar
             }
         }
 
+        // The player model carries a baked hitbox ragdoll. Keep it (inert) so a
+        // remote death can collapse the body. This must run before the hitbox
+        // scripts and colliders are stripped below.
+        CollectRagdollRig(clone);
+
         // Remove gameplay scripts with typed lookups. Do not iterate
         // GetComponentsInChildren<Component>(): Il2CppInterop returns base
         // Component wrappers there, so type tests fail and the old loop was
@@ -1915,9 +2227,12 @@ internal sealed class RemoteAvatar
             }
         }
 
+        // Never let the puppet offer a search/loot prompt, dead or alive.
+        EnsureNotSearchable(clone);
+
         foreach (Collider collider in clone.GetComponentsInChildren<Collider>(true))
         {
-            if (collider != null)
+            if (collider != null && !_ragdollColliders.Contains(collider))
             {
                 UnityEngine.Object.DestroyImmediate(collider, true);
             }
@@ -1925,7 +2240,7 @@ internal sealed class RemoteAvatar
 
         foreach (Rigidbody body in clone.GetComponentsInChildren<Rigidbody>(true))
         {
-            if (body != null)
+            if (body != null && !_ragdollBodies.Contains(body))
             {
                 UnityEngine.Object.DestroyImmediate(body, true);
             }
@@ -2319,7 +2634,7 @@ internal sealed class RemoteAvatar
 
     private void ApplyProceduralAnimation(float deltaTime)
     {
-        if (_gameAnimator != null || _bones.Count == 0)
+        if (_dead || _gameAnimator != null || _bones.Count == 0)
         {
             return;
         }

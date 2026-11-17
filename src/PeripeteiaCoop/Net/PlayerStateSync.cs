@@ -1,0 +1,117 @@
+using System;
+using UnityEngine;
+
+namespace PeripeteiaCoop;
+
+/// <summary>
+/// Shares player death and revival between the two machines.
+///
+/// Health, damage and inventory stay personal per player, but a death is
+/// something the whole party must see: the remote puppet goes down as a ragdoll
+/// where it fell and stands back up on revive. This module only watches the
+/// local player's real <see cref="HealthScript.dead"/> flag and broadcasts the
+/// transition; the actual ragdoll is driven by
+/// <see cref="RemoteAvatar.SetDead(bool, Vector3, Quaternion)"/> on the other
+/// machine, so no remote health is ever mutated from here.
+///
+/// The body is deliberately not lootable: the remote puppet is a stripped clone
+/// with no <c>Interaction</c>/<c>container</c> components, so the game never
+/// offers a search prompt on a dead teammate (see
+/// <c>RemoteAvatar.EnsureNotSearchable</c>).
+/// </summary>
+internal static class PlayerStateSync
+{
+    private const float ResendInterval = 5.0f;
+
+    private static bool _initialized;
+    private static bool _lastDead;
+    private static float _nextResendTime;
+    private static int _deathsSent;
+    private static int _deathsApplied;
+
+    public static bool Enabled =>
+        CoopPlugin.Settings.Role != CoopRole.Offline && CoopPlugin.PlayerSyncDeath;
+
+    public static int DeathsSent => _deathsSent;
+
+    public static int DeathsApplied => _deathsApplied;
+
+    public static void Tick(PlayerMovement? localPlayer)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        if (localPlayer == null || localPlayer.gameObject == null)
+        {
+            _initialized = false;
+            return;
+        }
+
+        HealthScript? health = localPlayer.GetComponent<HealthScript>();
+        if (health == null)
+        {
+            health = localPlayer.GetComponentInParent<HealthScript>();
+        }
+
+        if (health == null)
+        {
+            return;
+        }
+
+        bool dead = health.dead;
+
+        if (!_initialized)
+        {
+            // The first sample only seeds the baseline: both instances load the
+            // same save, so an already-dead state is not a transition.
+            _initialized = true;
+            _lastDead = dead;
+            _nextResendTime = Time.unscaledTime + ResendInterval;
+            return;
+        }
+
+        bool changed = dead != _lastDead;
+        bool resend = dead && Time.unscaledTime >= _nextResendTime;
+        if (!changed && !resend)
+        {
+            return;
+        }
+
+        _lastDead = dead;
+        _nextResendTime = Time.unscaledTime + ResendInterval;
+        _deathsSent++;
+
+        CoopPlugin.Network?.SendPlayerDeath(
+            CoopPlugin.Network.LocalId,
+            dead,
+            localPlayer.transform.position,
+            localPlayer.transform.rotation
+        );
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[death] local player {(dead ? "died" : "revived")} at " +
+            $"{localPlayer.transform.position}."
+        );
+    }
+
+    public static void Apply(int id, bool dead, Vector3 position, Quaternion rotation)
+    {
+        RemoteAvatar? avatar = CoopPlugin.Network?.GetAvatar(id);
+        if (avatar == null)
+        {
+            // The puppet is not spawned yet; the sender keeps resending while
+            // dead, so the state is not lost.
+            return;
+        }
+
+        if (avatar.IsDead == dead)
+        {
+            return;
+        }
+
+        _deathsApplied++;
+        avatar.SetDead(dead, position, rotation);
+    }
+}

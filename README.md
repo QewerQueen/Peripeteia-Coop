@@ -15,7 +15,9 @@ An experimental co-op / multiplayer mod for **Peripeteia** (Unity 2021.3.11f1, I
 > follows one shared branch: a dialogue, quest object or scripted teleport is
 > consumed by whichever player reaches it first, and the world changes it causes
 > are replayed on the other machine, so quest items and rewards are not duplicated.
-> The client reconnects automatically after a host restart.
+> Player death is shared too: a dead teammate goes down as a ragdoll and stands
+> back up on revive, and the body cannot be searched. The client reconnects
+> automatically after a host restart.
 > Inventory contents, ammo and scene transitions are still per-player; NPC AI only
 > chases the host, and cutscenes are not shared yet. Do not expect a complete co-op
 > playthrough at this stage.
@@ -336,9 +338,16 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   and the world GameObjects it switches are replayed on the other machine. Quest
   items and rewards therefore stay on the player who triggered them. The
   quest-log effects of a dialogue branch are shared too (`Story.SyncDialogueActions`),
-  and video cutscenes are replayed on both machines (`Story.SyncCutscenes`). The
+  the world-effect listeners a quest object drives (doors, pistons, elevators,
+  GameObject toggles) are replayed on the other machine
+  (`Story.SyncQuestEffects`), and video cutscenes are replayed on both machines
+  (`Story.SyncCutscenes`). Reward and inventory listeners are never replayed. The
   raw VIDE node progression itself is not mirrored, and scene transitions are
   still local to each instance.
+- Player death is shared (`Player.SyncDeath`): the remote body goes down where it
+  fell and stands back up on revive. The game's own baked ragdoll rig is used
+  (`Player.DeathRagdoll`); if the model has no rig the body simply stops
+  animating. A dead teammate cannot be searched or looted.
 - Both instances must enter the same level manually.
 - Both players need the same mod version and game version; the handshake rejects
   mismatches. A client reconnects automatically after a host restart, but the

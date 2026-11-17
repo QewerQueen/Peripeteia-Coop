@@ -72,6 +72,12 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool StorySyncDialogueActions { get; private set; } = true;
 
+    internal static bool StorySyncQuestEffects { get; private set; } = true;
+
+    internal static bool PlayerSyncDeath { get; private set; } = true;
+
+    internal static bool PlayerDeathRagdoll { get; private set; } = true;
+
     internal static CoopSettings Settings { get; private set; } = null!;
 
     internal static CoopNetwork? Network { get; private set; }
@@ -266,6 +272,27 @@ public sealed class CoopPlugin : BasePlugin
             "SyncDialogueActions",
             true,
             "Share the quest-log effects of a dialogue branch (NPCConversation.SetQuestLog / RemoveQuestLog). Item and reward actions are never replayed."
+        ).Value;
+
+        StorySyncQuestEffects = Config.Bind(
+            "Story",
+            "SyncQuestEffects",
+            true,
+            "Replay the world-effect listeners a quest object drives (doors, pistons, elevators, GameObject toggles) on the other machine. Reward and inventory listeners are never replayed."
+        ).Value;
+
+        PlayerSyncDeath = Config.Bind(
+            "Player",
+            "SyncDeath",
+            true,
+            "Share player death: when one player dies the other sees the body go down, and it stands back up on revive."
+        ).Value;
+
+        PlayerDeathRagdoll = Config.Bind(
+            "Player",
+            "DeathRagdoll",
+            true,
+            "Use the game's own ragdoll rig for the remote death (falls and stays down). If off, the body simply stops animating."
         ).Value;
 
         Settings = CoopSettings.Parse(Environment.GetCommandLineArgs());

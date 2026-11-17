@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using HarmonyLib;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.SceneManagement;
 using UnityEngine.Video;
 using VIDE_Data;
@@ -40,6 +42,7 @@ internal static class StorySync
     private static bool _walkInTeleport;
     private static int _eventsSent;
     private static int _eventsApplied;
+    private static int _effectsApplied;
     private static bool _suppressBroadcast;
     private static string _lastCutsceneKey = string.Empty;
     private static float _lastCutsceneTime;
@@ -51,6 +54,8 @@ internal static class StorySync
     public static int EventsSent => _eventsSent;
 
     public static int EventsApplied => _eventsApplied;
+
+    public static int EffectsApplied => _effectsApplied;
 
     public static void Tick(PlayerMovement? localPlayer)
     {
@@ -161,6 +166,7 @@ internal static class StorySync
             $"[story] quest action '{key}' used (multipleUse={action.multipleUse}, " +
             $"worldChanges={keys.Count})."
         );
+        LogQuestEffects(action);
         CoopPlugin.Network?.SendStoryEvent(
             key,
             (byte)StoryKind.QuestAction,
@@ -573,6 +579,11 @@ internal static class StorySync
             }
         }
 
+        if (kind == (byte)StoryKind.QuestAction)
+        {
+            ReplayQuestEffects(key);
+        }
+
         if (kind == (byte)StoryKind.Teleport)
         {
             TeleportLocalPlayer(point);
@@ -640,6 +651,259 @@ internal static class StorySync
         catch (Exception)
         {
             // Some objects cannot be toggled mid-frame; ignore.
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Quest-action world effects
+    //
+    // A quest action often has empty activated/deactivated object lists and
+    // instead drives the world through its Trigger UnityEvents (a piston door
+    // calls moveuptimes.BeginUp, a gate calls doorScript.OpenDoor, ...). Those
+    // listeners are identical on both machines because both load the same
+    // scene, so the receiving side re-reads its own copy of the action and
+    // invokes only the whitelisted world-effect targets. Reward and inventory
+    // listeners are never replayed, which is what keeps quest items from being
+    // granted twice.
+    // ------------------------------------------------------------------
+
+    private static readonly HashSet<string> WorldEffectTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "doorScript",
+        "moveuptimes",
+        "elevator",
+        "Triggerer",
+        "triggeronbuild",
+        "EnemyDoorTrigger",
+        "turnonanddie",
+        "turnononeframe",
+        "horrorsetpiece",
+        "MusicActivator",
+        "bridgebuilder",
+        "dynamicenemymover",
+        "trainnode",
+    };
+
+    private static bool IsWorldEffect(string typeName, string method)
+    {
+        // Toggling a plain GameObject is always a world change.
+        if (string.Equals(method, "SetActive", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (string.Equals(typeName, "QuestAction", StringComparison.OrdinalIgnoreCase))
+        {
+            // Never replay useQuestObject: it can grant quest items again.
+            return string.Equals(method, "activateQuestObject", StringComparison.Ordinal)
+                || string.Equals(method, "deactivateQuestObject", StringComparison.Ordinal);
+        }
+
+        return WorldEffectTypes.Contains(typeName);
+    }
+
+    /// <summary>
+    /// Logs every persistent listener a quest action drives. This is the
+    /// diagnostic that reveals which world effect a button actually uses.
+    /// </summary>
+    private static void LogQuestEffects(QuestAction action)
+    {
+        try
+        {
+            var triggers = action.Triggers;
+            if (triggers == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < triggers.Length; i++)
+            {
+                var trigger = triggers[i];
+                UnityEvent? evt = trigger.assign;
+                if (evt == null)
+                {
+                    continue;
+                }
+
+                var group = evt.m_PersistentCalls;
+                var calls = group != null ? group.m_Calls : null;
+                if (calls == null)
+                {
+                    continue;
+                }
+
+                for (int c = 0; c < calls.Count; c++)
+                {
+                    var call = calls[c];
+                    if (call == null)
+                    {
+                        continue;
+                    }
+
+                    UnityEngine.Object? target = call.target;
+                    string typeName = target != null ? target.GetType().Name : "<null>";
+                    CoopPlugin.LogSource.LogInfo(
+                        $"[story] quest trigger[{i}].assign -> {typeName}.{call.methodName} " +
+                        $"(mode={(int)call.mode})."
+                    );
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[story] quest trigger dump failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    private static void ReplayQuestEffects(string key)
+    {
+        if (!CoopPlugin.StorySyncQuestEffects)
+        {
+            return;
+        }
+
+        GameObject? target = FindObject(key);
+        if (target == null)
+        {
+            return;
+        }
+
+        QuestAction? action = target.GetComponent<QuestAction>();
+        if (action == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var triggers = action.Triggers;
+            if (triggers == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < triggers.Length; i++)
+            {
+                var trigger = triggers[i];
+                UnityEvent? evt = trigger.assign;
+                if (evt == null)
+                {
+                    continue;
+                }
+
+                ReplayUnityEvent(evt, key);
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[story] quest effect replay failed for '{key}': " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    private static void ReplayUnityEvent(UnityEvent evt, string key)
+    {
+        var group = evt.m_PersistentCalls;
+        var calls = group != null ? group.m_Calls : null;
+        if (calls == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < calls.Count; i++)
+        {
+            var call = calls[i];
+            if (call == null)
+            {
+                continue;
+            }
+
+            UnityEngine.Object? target = call.target;
+            string method = call.methodName ?? string.Empty;
+            if (target == null || string.IsNullOrEmpty(method))
+            {
+                continue;
+            }
+
+            string typeName = target.GetType().Name;
+            if (!IsWorldEffect(typeName, method))
+            {
+                CoopPlugin.LogSource.LogInfo(
+                    $"[story] quest '{key}': skipping non-world effect " +
+                    $"'{typeName}.{method}' (avoids duplicating rewards)."
+                );
+                continue;
+            }
+
+            int mode = (int)call.mode;
+            var args = call.arguments;
+            object?[] arguments = mode switch
+            {
+                2 => new object?[] { args != null ? args.unityObjectArgument : null },
+                3 => new object?[] { args != null ? args.intArgument : 0 },
+                4 => new object?[] { args != null ? args.floatArgument : 0.0f },
+                5 => new object?[] { args != null ? args.stringArgument : string.Empty },
+                6 => new object?[] { args != null && args.boolArgument },
+                _ => Array.Empty<object?>(),
+            };
+
+            InvokeEffect(target, typeName, method, arguments, key);
+        }
+    }
+
+    private static void InvokeEffect(
+        UnityEngine.Object target,
+        string typeName,
+        string method,
+        object?[] arguments,
+        string key
+    )
+    {
+        try
+        {
+            MethodInfo? info = null;
+            foreach (MethodInfo candidate in target.GetType().GetMethods(
+                         BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!string.Equals(candidate.Name, method, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (candidate.GetParameters().Length != arguments.Length)
+                {
+                    continue;
+                }
+
+                info = candidate;
+                break;
+            }
+
+            if (info == null)
+            {
+                CoopPlugin.LogSource.LogWarning(
+                    $"[story] quest '{key}': no method '{typeName}.{method}' " +
+                    $"with {arguments.Length} argument(s)."
+                );
+                return;
+            }
+
+            info.Invoke(target, arguments);
+            _effectsApplied++;
+            CoopPlugin.LogSource.LogInfo(
+                $"[story] quest '{key}': applied world effect '{typeName}.{method}'."
+            );
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[story] quest '{key}': effect '{typeName}.{method}' failed: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
         }
     }
 

@@ -34,6 +34,7 @@ internal sealed class CoopNetwork : IDisposable
         EnemyState = 10,
         EnemyDeath = 11,
         StoryEvent = 12,
+        PlayerDeath = 13,
     }
 
     [Flags]
@@ -49,7 +50,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 15;
+    private const int ProtocolVersion = 16;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
 
@@ -117,6 +118,12 @@ internal sealed class CoopNetwork : IDisposable
         {
             yield return id;
         }
+    }
+
+    /// <summary>The remote avatar for an id, or null when it is not spawned.</summary>
+    public RemoteAvatar? GetAvatar(int id)
+    {
+        return _avatars.TryGetValue(id, out RemoteAvatar? avatar) ? avatar : null;
     }
 
     public CoopNetwork(CoopSettings settings)
@@ -193,6 +200,7 @@ internal sealed class CoopNetwork : IDisposable
         CombatSync.Tick(localPlayer);
         EnemySync.Tick(localPlayer);
         AiTargeting.Tick(localPlayer);
+        PlayerStateSync.Tick(localPlayer);
         StorySync.Tick(localPlayer);
 
         string localScene = localPlayer != null ? localPlayer.gameObject.scene.name : string.Empty;
@@ -282,7 +290,8 @@ internal sealed class CoopNetwork : IDisposable
             {
                 CoopPlugin.LogSource.LogInfo(
                     $"[sync] enemies mirrored={EnemySync.MirrorsSent} deaths={EnemySync.DeathsSent}/{EnemySync.DeathsApplied} " +
-                    $"aiTargets={AiTargeting.RegisteredCount} story={StorySync.EventsSent}/{StorySync.EventsApplied}"
+                    $"aiTargets={AiTargeting.RegisteredCount} story={StorySync.EventsSent}/{StorySync.EventsApplied} " +
+                    $"storyEffects={StorySync.EffectsApplied} playerDeaths={PlayerStateSync.DeathsSent}/{PlayerStateSync.DeathsApplied}"
                 );
             }
         }
@@ -721,6 +730,50 @@ internal sealed class CoopNetwork : IDisposable
             writer.Put(objectKeys[i] ?? string.Empty);
             writer.Put(objectStates[i]);
         }
+    }
+
+    /// <summary>
+    /// Reliable player death/revive event. Sent by the player whose health
+    /// changed; the host relays it to the other clients.
+    /// </summary>
+    public void SendPlayerDeath(int id, bool dead, Vector3 position, Quaternion rotation)
+    {
+        if (_net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        WritePlayerDeath(writer, id, dead, position, rotation);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    private static void WritePlayerDeath(
+        NetDataWriter writer,
+        int id,
+        bool dead,
+        Vector3 position,
+        Quaternion rotation
+    )
+    {
+        writer.Put((byte)PacketType.PlayerDeath);
+        writer.Put(id);
+        writer.Put(dead);
+        writer.Put(position.x);
+        writer.Put(position.y);
+        writer.Put(position.z);
+        writer.Put(rotation.x);
+        writer.Put(rotation.y);
+        writer.Put(rotation.z);
+        writer.Put(rotation.w);
     }
 
     public void SendWeaponState(WeaponSnapshot snapshot)
@@ -1210,6 +1263,7 @@ internal sealed class CoopNetwork : IDisposable
             type != PacketType.ItemEvent &&
             type != PacketType.EnemyState &&
             type != PacketType.EnemyDeath &&
+            type != PacketType.PlayerDeath &&
             type != PacketType.StoryEvent)
         {
             CoopPlugin.LogSource.LogInfo($"[net] Received {type} from {peer.Address}:{peer.Port}.");
@@ -1259,6 +1313,10 @@ internal sealed class CoopNetwork : IDisposable
 
             case PacketType.EnemyDeath:
                 ReceiveEnemyDeath(peer, reader);
+                break;
+
+            case PacketType.PlayerDeath:
+                ReceivePlayerDeath(peer, reader);
                 break;
 
             case PacketType.StoryEvent:
@@ -1532,6 +1590,39 @@ internal sealed class CoopNetwork : IDisposable
 
         var relay = new NetDataWriter();
         WriteStoryEvent(relay, key, kind, point, text, number, objectKeys, objectStates);
+        foreach (NetPeer other in _net.ConnectedPeerList)
+        {
+            if (other != peer)
+            {
+                other.Send(relay, DeliveryMethod.ReliableOrdered);
+            }
+        }
+    }
+
+    private void ReceivePlayerDeath(NetPeer peer, NetDataReader reader)
+    {
+        int id = reader.GetInt();
+        bool dead = reader.GetBool();
+        var position = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+        var rotation = new Quaternion(
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat()
+        );
+
+        if (id != _localId)
+        {
+            PlayerStateSync.Apply(id, dead, position, rotation);
+        }
+
+        if (_settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        var relay = new NetDataWriter();
+        WritePlayerDeath(relay, id, dead, position, rotation);
         foreach (NetPeer other in _net.ConnectedPeerList)
         {
             if (other != peer)

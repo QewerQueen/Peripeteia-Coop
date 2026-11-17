@@ -40,6 +40,10 @@
 | `AITarget` / `AIController.addCustomTarget` | регистрация не-врага (игрока) как цели AI | `AITarget.DMG`/`Faction`/`FactionNo`/`customTarget`; `addCustomTarget(bool add, Transform centerOfMass, float sightRange, int fact, EnemyController ec, HealthScript HP, damageScript dmg, AITarget aiTarget, Senses senses, HitBoxes hboxes)` |
 | `VIDE_Data.VD` / `VD2` / `ActionNode` | диалоги VIDE и их эффекты | `VD.currentActionNode` (static) / `VD2.currentActionNode` (instance), событие `OnActionNode`; `ActionNode.gameObjectName`/`methodName`/`paramType`/`param_int`; `DoAction()` — точка патча |
 | `VideoPlayer` / `cutsceneplayer` | видео-катсцены | `cutsceneplayer.vp`, `destroyobjectonend`; `UnityEngine.Video.VideoPlayer.Play()` — точка патча |
+| `UnityEngine.Events.UnityEvent` / `PersistentCall` | мировые эффекты квестового объекта | `UnityEventBase.m_PersistentCalls` → `PersistentCallGroup.m_Calls` → `PersistentCall.target`/`methodName`/`mode`/`arguments`; `QuestAction.Triggers[].assign` перепроигрывается на пире (только world-эффекты) |
+| `HitBoxes` / `HitBox` / `CharacterJoint` | встроенный рэгдолл игрока | `HitBoxes.Ragroll(bool)`/`unRagroll()`/`revive(bool)`; `HitBox.attachedRB`/`charjoint`; клон сохраняет риг (Rigidbody+Collider+CharacterJoint) и включает его при смерти |
+| `Interaction` / `container` / `EnemyInventory` / `frob` | обыск/лут тел | «Обыскать» появляется только при наличии `Interaction`/`container`; на удалённом теле их нет, поэтому труп товарища не обыскивается |
+| `HealthScript.dead` | смерть/оживление игрока | `PlayerStateSync` следит за локальным `dead` и рассылает `PlayerDeath` |
 
 ## Иерархия игрока (runtime dump)
 
@@ -106,7 +110,7 @@ Player
 - Типы сообщений (`PacketType`): `Hello` (1), `Welcome` (2), `Pose` (3),
   `DoorState` (4), `ItemState` (5), `WeaponState` (6), `WeaponEvent` (7),
   `Damage` (8), `ItemEvent` (9), `EnemyState` (10), `EnemyDeath` (11),
-  `StoryEvent` (12). Текущая версия протокола — 15.
+  `StoryEvent` (12), `PlayerDeath` (13). Текущая версия протокола — 16.
 - `Hello` — протокол, версия мода, версия игры, имя клиента; `Welcome` — id +
   те же версии + имя хоста.
 - Несовпадение версии протокола/мода/игры — отказ и disconnect.
