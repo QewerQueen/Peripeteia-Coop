@@ -91,19 +91,29 @@ INSTALL
 WHAT WORKS
   - Full cloned player model with the game's animations, Q/E lean and a
     simplified dragging-hand pose.
-  - Host-authoritative doors.
-  - Prototype world items: pickup/drop/drag for items already in the scene.
-  - Visual held-weapon replication and muzzle flashes, using a real game
-    ItemInfo on the receiving side. Ammo, damage and inventory are local.
+  - Position/rotation at 30 Hz, host-authoritative doors, and a prototype
+    world-item layer: pickup/drop/drag for items already in the scene.
+  - Player-versus-player: every remote puppet gets a physics proxy and hits are
+    applied through the game's real damage system on the victim's machine.
+  - Shared world: NPCs and enemies are mirrored host-authoritatively, and a kill
+    by either player counts for both.
+  - One shared story branch: a one-time dialogue, quest object or scripted
+    teleport is consumed by whichever player reaches it first, and the world
+    changes it causes (doors, pistons, elevators, object toggles) are replayed
+    on the other machine, so quest items and rewards are not duplicated.
+    Cutscenes and dialogue quest-log effects are shared too.
+  - Shared player death: a dead teammate goes down as a ragdoll and stands back
+    up on revive, and the body cannot be searched.
   - ESC menu opens without pausing the world; focus loss does not open it.
 
 NOTES
   - A co-op client cannot write saves (Client.BlockSaves=true by default).
   - Internet play needs UDP port 7777 forwarded, or a VPN mesh such as
     ZeroTier/Tailscale. The game has no Steam P2P networking.
-  - Inventory, equipment ownership, ammo, damage, quests, NPC reactions and
-    scene transitions are not synchronized yet. This is an early prototype,
-    not a complete co-op campaign.
+  - Inventory contents, equipment ownership, ammo, money and scene transitions
+    are personal per player and are not synchronized yet. Both players must
+    enter the same level. This is an early prototype, not a complete co-op
+    campaign.
   - Both players need the same game version and mod version. Pin the game
     version because updates can break the IL2CPP interop.
 
