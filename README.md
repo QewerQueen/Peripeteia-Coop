@@ -381,8 +381,12 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   keeps nearby actors animating, so the snapshot is never a frozen statue. The
   host also registers the remote player as an AI target
   (`Ai.TargetRemotePlayer`, experimental) so enemies can notice, chase and shoot
-  at the client; the client still takes no AI damage from the host's simulation,
-  only from player-versus-player combat.
+  at the client, and gives the puppet an inert collider on the layer the AI looks
+  for the player on (`Ai.PerceptionCollider`), without which the perception rays
+  passed straight through it. Enemy weapons use the same `Shoot` component as the
+  player's, so an NPC shot that reaches the client is caught by the same hit path
+  as player-versus-player fire and applied on the client's machine through its
+  real `HealthScript` (`Ai.DamageRemotePlayer`).
 - The story follows one shared branch (`Story.*` config): a one-time dialogue,
   quest object or scripted teleport is consumed by the first player to reach it,
   and the world GameObjects it switches are replayed on the other machine. A

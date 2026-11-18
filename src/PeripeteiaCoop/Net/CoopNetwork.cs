@@ -884,13 +884,24 @@ internal sealed class CoopNetwork : IDisposable
     /// </summary>
     public void SendDamage(int targetId, int amount, bool headshot, Vector3 point)
     {
+        SendDamage(targetId, _localId, amount, headshot, point);
+    }
+
+    /// <summary>
+    /// Reports a hit with an explicit dealer. The host uses this for NPC damage,
+    /// where the shooter is not a player at all and there is no avatar to credit;
+    /// <paramref name="dealerId"/> is then a negative sentinel so the victim does
+    /// not mistake the damage for friendly fire from the other player.
+    /// </summary>
+    public void SendDamage(int targetId, int dealerId, int amount, bool headshot, Vector3 point)
+    {
         if (_net.ConnectedPeersCount == 0)
         {
             return;
         }
 
         var writer = new NetDataWriter();
-        WriteDamage(writer, targetId, _localId, amount, headshot, point);
+        WriteDamage(writer, targetId, dealerId, amount, headshot, point);
 
         if (_settings.Role == CoopRole.Host)
         {

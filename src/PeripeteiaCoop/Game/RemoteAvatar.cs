@@ -2821,6 +2821,7 @@ internal sealed class RemoteAvatar
     {
         _hitProxy = null;
         _perceptionProxy = null;
+        CombatSync.ClearAvatarColliders();
         _ragdollBodies.Clear();
         _ragdollColliders.Clear();
         _ragdollJoints.Clear();

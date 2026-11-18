@@ -93,6 +93,26 @@ internal static class CombatSync
         }
     }
 
+    // Colliders that belong to a remote avatar but are not part of the combat
+    // proxy itself - currently the AI perception capsule. They sit between the
+    // muzzle and the proxy, so they must never count as a wall.
+    private static readonly HashSet<int> AvatarExtraColliders = new();
+
+    public static void RegisterAvatarCollider(Collider? collider)
+    {
+        if (collider == null)
+        {
+            return;
+        }
+
+        AvatarExtraColliders.Add(collider.GetInstanceID());
+    }
+
+    public static void ClearAvatarColliders()
+    {
+        AvatarExtraColliders.Clear();
+    }
+
     public static void Tick(PlayerMovement? localPlayer)
     {
         if (CoopPlugin.Settings.Role == CoopRole.Offline)
@@ -284,6 +304,10 @@ internal static class CombatSync
         int avatarId
     )
     {
+        // There is exactly one remote puppet, so any collider registered by a
+        // previous build of it is stale by now.
+        ClearAvatarColliders();
+
         if (root == null ||
             CoopPlugin.Settings.Role != CoopRole.Host ||
             !CoopPlugin.AiEnabled ||
@@ -329,6 +353,10 @@ internal static class CombatSync
             capsule.height = height;
             capsule.radius = radius;
             capsule.isTrigger = false;
+
+            // Register it so the shot raycast never mistakes the puppet's own
+            // body for a wall between a muzzle and the combat proxy.
+            RegisterAvatarCollider(capsule);
 
             CoopPlugin.LogSource.LogInfo(
                 $"[ai] perception collider for avatar {avatarId}: " +
@@ -423,14 +451,20 @@ internal static class CombatSync
     }
 
     /// <summary>
-    /// Called from the Shoot.Fire patches. Works out whether the local player's
-    /// bullet hit a remote proxy and, if so, reports the hit to that player.
+    /// Called from the Shoot.Fire patches. Works out whether the bullet hit a
+    /// remote proxy and, if so, reports the hit to that player.
+    ///
+    /// Two kinds of shooter can hit the remote player: the local player
+    /// (player-versus-player) and an NPC. Enemies fire through the very same
+    /// <see cref="Shoot"/> component, and the host simulates all of them, so an
+    /// enemy shot that reaches the client is detected here too and forwarded as
+    /// damage for the client to apply. <see cref="WeaponSync.IsLocalPlayerWeapon"/>
+    /// tells the two apart.
     /// </summary>
-    public static void OnLocalShot(Shoot shoot)
+    public static void OnShot(Shoot shoot)
     {
         if (CoopPlugin.Settings.Role == CoopRole.Offline ||
             !CoopPlugin.CombatEnabled ||
-            !CoopPlugin.CombatPlayerDamage ||
             shoot == null ||
             _localPlayer == null ||
             ProxyByCollider.Count == 0 ||
@@ -440,7 +474,17 @@ internal static class CombatSync
             return;
         }
 
-        if (!WeaponSync.IsLocalPlayerWeapon(shoot))
+        bool byLocalPlayer = WeaponSync.IsLocalPlayerWeapon(shoot);
+        if (byLocalPlayer)
+        {
+            if (!CoopPlugin.CombatPlayerDamage)
+            {
+                return;
+            }
+        }
+        else if (!CoopPlugin.AiEnabled ||
+                 !CoopPlugin.AiTargetRemotePlayer ||
+                 !CoopPlugin.AiDamageRemotePlayer)
         {
             return;
         }
@@ -526,7 +570,8 @@ internal static class CombatSync
             {
                 if (blocker.collider == null ||
                     blocker.distance < 0.05f ||
-                    IsLocalPlayerCollider(blocker.collider))
+                    (byLocalPlayer && IsLocalPlayerCollider(blocker.collider)) ||
+                    IsAvatarCollider(blocker.collider))
                 {
                     continue;
                 }
@@ -543,14 +588,21 @@ internal static class CombatSync
         Vector3 point = origin + direction * bestDistance;
         _shotsHit++;
 
-        CoopPlugin.Network.SendDamage(best.AvatarId, damage, headshot, point);
-        SpawnHitMarker(point, headshot);
+        // An NPC has no player to credit, so it reports a negative dealer and the
+        // victim's machine will not treat it as friendly fire from the partner.
+        int dealerId = byLocalPlayer ? CoopPlugin.Network.LocalId : -1;
+        CoopPlugin.Network.SendDamage(best.AvatarId, dealerId, damage, headshot, point);
+
+        if (byLocalPlayer)
+        {
+            SpawnHitMarker(point, headshot);
+        }
 
         if (CoopPlugin.ProbeEnabled)
         {
             CoopPlugin.LogSource.LogInfo(
-                $"[combat] hit avatar {best.AvatarId} for {damage} " +
-                $"headshot={headshot} distance={bestDistance:F2} point={point}"
+                $"[combat] {(byLocalPlayer ? "player" : "npc")} hit avatar {best.AvatarId} " +
+                $"for {damage} headshot={headshot} distance={bestDistance:F2} point={point}"
             );
         }
     }
@@ -558,12 +610,20 @@ internal static class CombatSync
     /// <summary>Applies damage that the network delivered for the local player.</summary>
     public static void ApplyLocalDamage(int dealerId, int amount, bool headshot, Vector3 point)
     {
-        if (!CoopPlugin.CombatEnabled || !CoopPlugin.CombatPlayerDamage || amount <= 0)
+        if (!CoopPlugin.CombatEnabled || amount <= 0)
         {
             return;
         }
 
-        if (CoopPlugin.Network != null && dealerId == CoopPlugin.Network.LocalId)
+        // A negative dealer means the damage came from an NPC, not from the
+        // partner, so the player-versus-player switch does not apply to it.
+        bool fromPlayer = dealerId >= 0;
+        if (fromPlayer && !CoopPlugin.CombatPlayerDamage)
+        {
+            return;
+        }
+
+        if (fromPlayer && CoopPlugin.Network != null && dealerId == CoopPlugin.Network.LocalId)
         {
             return;
         }
@@ -608,8 +668,9 @@ internal static class CombatSync
 
         if (CoopPlugin.ProbeEnabled)
         {
+            string source = fromPlayer ? $"avatar {dealerId}" : "an NPC";
             CoopPlugin.LogSource.LogInfo(
-                $"[combat] took {amount} damage from avatar {dealerId} " +
+                $"[combat] took {amount} damage from {source} " +
                 $"headshot={headshot} point={point} hp={(health != null ? health.HP : 0)}"
             );
         }
@@ -672,6 +733,12 @@ internal static class CombatSync
                colliderTransform.IsChildOf(_localPlayer.transform);
     }
 
+    /// <summary>True for a collider that belongs to the remote avatar itself.</summary>
+    private static bool IsAvatarCollider(Collider collider)
+    {
+        return collider != null && AvatarExtraColliders.Contains(collider.GetInstanceID());
+    }
+
     private static void SpawnHitMarker(Vector3 point, bool headshot)
     {
         try
@@ -708,7 +775,7 @@ internal static class CombatFireSimplePatch
 {
     private static void Postfix(Shoot __instance)
     {
-        CombatSync.OnLocalShot(__instance);
+        CombatSync.OnShot(__instance);
     }
 }
 
@@ -717,7 +784,7 @@ internal static class CombatFireAtPointPatch
 {
     private static void Postfix(Shoot __instance)
     {
-        CombatSync.OnLocalShot(__instance);
+        CombatSync.OnShot(__instance);
     }
 }
 
@@ -730,6 +797,6 @@ internal static class CombatFireAtPointTriggerPatch
 {
     private static void Postfix(Shoot __instance)
     {
-        CombatSync.OnLocalShot(__instance);
+        CombatSync.OnShot(__instance);
     }
 }

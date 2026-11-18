@@ -60,6 +60,8 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool AiPerceptionCollider { get; private set; } = true;
 
+    internal static bool AiDamageRemotePlayer { get; private set; } = true;
+
     internal static bool StoryEnabled { get; private set; } = true;
 
     internal static bool StoryLockDialogues { get; private set; } = true;
@@ -247,6 +249,13 @@ public sealed class CoopPlugin : BasePlugin
             "PerceptionCollider",
             true,
             "Host only: add an inert collider on the layer the game's AI uses to detect the player. The combat proxy lives on the player's own (Ignore Raycast) layer, so without this the host's AI never sees the client. Requires TargetRemotePlayer."
+        ).Value;
+
+        AiDamageRemotePlayer = Config.Bind(
+            "Ai",
+            "DamageRemotePlayer",
+            true,
+            "Host only: NPC shots that hit the client deal damage on the client's machine (through its real HealthScript). NPC weapons use the same Shoot component as the player's, so this reuses the player-versus-player hit path. Requires TargetRemotePlayer."
         ).Value;
 
         StoryEnabled = Config.Bind(
