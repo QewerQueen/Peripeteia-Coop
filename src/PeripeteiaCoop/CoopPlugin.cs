@@ -48,6 +48,8 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool ItemsSpawnMissing { get; private set; } = true;
 
+    internal static bool ItemsShareKeys { get; private set; } = true;
+
     internal static bool AiEnabled { get; private set; } = true;
 
     internal static bool AiSyncDeaths { get; private set; } = true;
@@ -83,6 +85,10 @@ public sealed class CoopPlugin : BasePlugin
     internal static bool StoryShareItemRewards { get; private set; } = true;
 
     internal static bool StoryShareQuestRewards { get; private set; } = true;
+
+    internal static bool StorySyncFlags { get; private set; } = true;
+
+    internal static bool StorySyncQuestEvents { get; private set; } = true;
 
     internal static bool SyncSceneTransitions { get; private set; } = true;
 
@@ -225,6 +231,13 @@ public sealed class CoopPlugin : BasePlugin
             "When a player drops an item this side never had (for example a quest reward), clone a matching template from the scene so the teammate can see and pick it up. Turn off to only sync items both sides already have."
         ).Value;
 
+        ItemsShareKeys = Config.Bind(
+            "Items",
+            "ShareKeyItems",
+            true,
+            "Key/quest items (the item a keycard or access point checks for) are not synchronized as world pickups: each player keeps their own copy, so both can pick up the key and open the same door. Turn off to make keys single-pickup like every other item."
+        ).Value;
+
         AiEnabled = Config.Bind(
             "Ai",
             "Enabled",
@@ -349,6 +362,20 @@ public sealed class CoopPlugin : BasePlugin
             "ShareQuestRewards",
             true,
             "Also replay the item rewards a quest object hands out (ItemInfo.pickupitem), so a quest reward reaches both players and the two inventories match. Replayed rewards do not echo back as world pickups. Turn off if a quest reward must stay with the first player only."
+        ).Value;
+
+        StorySyncFlags = Config.Bind(
+            "Story",
+            "SyncFlags",
+            true,
+            "Mirror the game's named save flags (FlagsForSaveFiles.SetFlag / SetTrue / SetFalse) between the machines, so both agree on which quests are done. A flag changed during play is set for the other player; a save load does not broadcast."
+        ).Value;
+
+        StorySyncQuestEvents = Config.Bind(
+            "Story",
+            "SyncQuestEvents",
+            true,
+            "Mirror the intro tutorial quest manager (questmanagerTUTORIAL.triggerevent / blockevents / unblockevents), so both players see the same tutorial steps and their side effects."
         ).Value;
 
         PlayerSyncDeath = Config.Bind(
@@ -587,6 +614,15 @@ public sealed class CoopPlugin : BasePlugin
         TryPatch(typeof(StoryDialogueActionV2Patch));
         TryPatch(typeof(StoryGiftAllPatch));
         TryPatch(typeof(StoryGiftAtIndexPatch));
+        TryPatch(typeof(StoryFlagSetPatch));
+        TryPatch(typeof(StoryFlagSetIndexPatch));
+        TryPatch(typeof(StoryFlagSetTruePatch));
+        TryPatch(typeof(StoryFlagSetFalsePatch));
+        TryPatch(typeof(StoryFlagSetTrueIndexPatch));
+        TryPatch(typeof(StoryFlagSetFalseIndexPatch));
+        TryPatch(typeof(StoryQuestTriggerEventPatch));
+        TryPatch(typeof(StoryQuestBlockEventsPatch));
+        TryPatch(typeof(StoryQuestUnblockEventsPatch));
         TryPatch(typeof(DisableTimeControllerPausePatch));
         TryPatch(typeof(DisableFocusPausePatch));
         TryPatch(typeof(MainMenuOpenProbePatch));

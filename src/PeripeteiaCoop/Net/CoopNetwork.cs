@@ -357,7 +357,9 @@ internal sealed class CoopNetwork : IDisposable
                 CoopPlugin.LogSource.LogInfo(
                     $"[sync] enemies mirrored={EnemySync.MirrorsSent} deaths={EnemySync.DeathsSent}/{EnemySync.DeathsApplied} " +
                     $"aiTargets={AiTargeting.RegisteredCount} story={StorySync.EventsSent}/{StorySync.EventsApplied} " +
-                    $"storyEffects={StorySync.EffectsApplied} playerDeaths={PlayerStateSync.DeathsSent}/{PlayerStateSync.DeathsApplied} " +
+                    $"storyEffects={StorySync.EffectsApplied} flags={StorySync.FlagsSent}/{StorySync.FlagsApplied} " +
+                    $"questEvents={StorySync.QuestEventsSent}/{StorySync.QuestEventsApplied} " +
+                    $"playerDeaths={PlayerStateSync.DeathsSent}/{PlayerStateSync.DeathsApplied} " +
                     $"saveLoads={SaveLoadSync.LoadsRequested}/{SaveLoadSync.LoadsApplied} " +
                     $"scenes={SceneSync.ChangesSent}/{SceneSync.ChangesApplied} " +
                     $"tracers={NpcShotSync.Sent}/{NpcShotSync.Received} corpses={LocalCorpse.Applied}"

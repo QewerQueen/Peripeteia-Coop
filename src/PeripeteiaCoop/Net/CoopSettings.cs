@@ -64,6 +64,22 @@ internal sealed class CoopSettings
     public string LoadSaveName { get; private set; } = string.Empty;
 
     /// <summary>
+    /// Debug-only solo test mode: dump the story components (VIDE_Assign,
+    /// keycard, questmanagerTUTORIAL) present in the loaded scene, so a retest
+    /// can see what the mod has to work with. Never enabled unless
+    /// -coop-story-scan is passed.
+    /// </summary>
+    public bool StoryScan { get; private set; }
+
+    /// <summary>
+    /// Debug-only solo test mode: the name of a key/quest item to pick up once in
+    /// a level, so a retest can prove that a key picked up by one player stays in
+    /// the other player's world instead of vanishing. Never set unless
+    /// -coop-key-test is passed.
+    /// </summary>
+    public string KeyTestName { get; private set; } = string.Empty;
+
+    /// <summary>
     /// Reconfigure the session at runtime, for the in-game "Peripeteia Coop"
     /// menu. The command line still works: it just calls these before the first
     /// frame. A session cannot change role once it is running.
@@ -186,6 +202,19 @@ internal sealed class CoopSettings
                     if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
                     {
                         settings.LoadSaveName = args[++i];
+                    }
+                    break;
+
+                case "-coop-story-scan":
+                case "--coop-story-scan":
+                    settings.StoryScan = true;
+                    break;
+
+                case "-coop-key-test":
+                case "--coop-key-test":
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                    {
+                        settings.KeyTestName = args[++i];
                     }
                     break;
             }

@@ -53,6 +53,13 @@ internal static class StorySync
     private static int _eventsApplied;
     private static int _effectsApplied;
     private static bool _suppressBroadcast;
+    private static bool _applyingRemote;
+    private static FlagsForSaveFiles? _flagComponent;
+    private static readonly Dictionary<string, bool> KnownFlags = new();
+    private static int _flagsSent;
+    private static int _flagsApplied;
+    private static int _questEventsSent;
+    private static int _questEventsApplied;
     private static string _lastCutsceneKey = string.Empty;
     private static float _lastCutsceneTime;
     private static float _lastCutsceneProbe;
@@ -67,6 +74,14 @@ internal static class StorySync
     public static int EventsApplied => _eventsApplied;
 
     public static int EffectsApplied => _effectsApplied;
+
+    public static int FlagsSent => _flagsSent;
+
+    public static int FlagsApplied => _flagsApplied;
+
+    public static int QuestEventsSent => _questEventsSent;
+
+    public static int QuestEventsApplied => _questEventsApplied;
 
     public static void Tick(PlayerMovement? localPlayer)
     {
@@ -830,6 +845,238 @@ internal static class StorySync
     }
 
     // ------------------------------------------------------------------
+    // Save flags (FlagsForSaveFiles)
+    //
+    // The game's quest progression is driven by named save flags. Setting one
+    // locally (SetFlag / SetTrue / SetFalse) is mirrored on the other machine,
+    // so both copies of the world agree on which quests are done. Flags are
+    // changed through SetFlag during gameplay; a save load writes the flag
+    // array directly, so a load does not turn into a storm of packets.
+    // ------------------------------------------------------------------
+
+    public static void OnFlagChanged(FlagsForSaveFiles? component, string name, bool requested)
+    {
+        if (!Enabled || !CoopPlugin.StorySyncFlags || _applyingRemote || _suppressBroadcast)
+        {
+            return;
+        }
+
+        if (component == null || string.IsNullOrEmpty(name))
+        {
+            return;
+        }
+
+        bool value = requested;
+        try
+        {
+            if (component.TryGetFlagValue(name, out bool current))
+            {
+                value = current;
+            }
+        }
+        catch (Exception)
+        {
+            // Keep the requested value if the lookup is unavailable.
+        }
+
+        if (KnownFlags.TryGetValue(name, out bool known) && known == value)
+        {
+            return;
+        }
+
+        KnownFlags[name] = value;
+        _flagsSent++;
+        CoopPlugin.LogSource.LogInfo($"[story] flag '{name}' = {value} (sharing).");
+        CoopPlugin.Network?.SendStoryEvent(
+            name,
+            (byte)StoryKind.Flag,
+            Vector3.zero,
+            ComponentNameOf(component),
+            value ? 1 : 0,
+            Array.Empty<string>(),
+            Array.Empty<bool>()
+        );
+    }
+
+    public static string NameOfFlagIndex(FlagsForSaveFiles? component, int index)
+    {
+        try
+        {
+            if (component != null && component.flags != null &&
+                index >= 0 && index < component.flags.Length)
+            {
+                SaveFlag flag = component.flags[index];
+                if (flag != null)
+                {
+                    return flag.name ?? string.Empty;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // ignore
+        }
+
+        return string.Empty;
+    }
+
+    private static string ComponentNameOf(FlagsForSaveFiles component)
+    {
+        try
+        {
+            return component.gameObject != null ? component.gameObject.name : string.Empty;
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
+    }
+
+    private static void ApplyRemoteFlag(string name, bool value, string componentName)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return;
+        }
+
+        FlagsForSaveFiles? component = FindFlagComponent(componentName);
+        if (component == null)
+        {
+            return;
+        }
+
+        try
+        {
+            _applyingRemote = true;
+            component.SetFlag(name, value);
+            KnownFlags[name] = value;
+            _flagsApplied++;
+            CoopPlugin.LogSource.LogInfo($"[story] applied remote flag '{name}' = {value}.");
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[story] flag '{name}' apply failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+        finally
+        {
+            _applyingRemote = false;
+        }
+    }
+
+    private static FlagsForSaveFiles? FindFlagComponent(string name)
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(name))
+            {
+                foreach (FlagsForSaveFiles candidate in UnityEngine.Object.FindObjectsOfType<FlagsForSaveFiles>())
+                {
+                    if (candidate != null && candidate.gameObject != null &&
+                        string.Equals(candidate.gameObject.name, name, StringComparison.Ordinal))
+                    {
+                        _flagComponent = candidate;
+                        return candidate;
+                    }
+                }
+            }
+
+            if (_flagComponent != null && _flagComponent.gameObject != null)
+            {
+                return _flagComponent;
+            }
+
+            _flagComponent = UnityEngine.Object.FindObjectOfType<FlagsForSaveFiles>();
+        }
+        catch (Exception)
+        {
+            _flagComponent = null;
+        }
+
+        return _flagComponent;
+    }
+
+    // ------------------------------------------------------------------
+    // Tutorial quest manager (questmanagerTUTORIAL)
+    //
+    // The intro quest manager advances through numbered events. Running one is
+    // mirrored so both players see the same tutorial steps and their side
+    // effects (flags, doors, spawns).
+    // ------------------------------------------------------------------
+
+    public static void OnQuestEvent(string method, int which)
+    {
+        if (!Enabled || !CoopPlugin.StorySyncQuestEvents || _applyingRemote || _suppressBroadcast)
+        {
+            return;
+        }
+
+        _questEventsSent++;
+        CoopPlugin.LogSource.LogInfo($"[story] quest event {method}({which}) (sharing).");
+        CoopPlugin.Network?.SendStoryEvent(
+            "quest",
+            (byte)StoryKind.QuestEvent,
+            Vector3.zero,
+            method,
+            which,
+            Array.Empty<string>(),
+            Array.Empty<bool>()
+        );
+    }
+
+    private static void ApplyRemoteQuestEvent(string method, int which)
+    {
+        questmanagerTUTORIAL? manager;
+        try
+        {
+            manager = UnityEngine.Object.FindObjectOfType<questmanagerTUTORIAL>();
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        if (manager == null)
+        {
+            return;
+        }
+
+        try
+        {
+            _applyingRemote = true;
+            switch (method)
+            {
+                case "triggerevent":
+                    manager.triggerevent(which);
+                    break;
+                case "blockevents":
+                    manager.blockevents(which);
+                    break;
+                case "unblockevents":
+                    manager.unblockevents(which);
+                    break;
+                default:
+                    return;
+            }
+
+            _questEventsApplied++;
+            CoopPlugin.LogSource.LogInfo($"[story] applied remote quest event {method}({which}).");
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[story] quest event {method}({which}) apply failed: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+        finally
+        {
+            _applyingRemote = false;
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Receiving
     // ------------------------------------------------------------------
 
@@ -853,6 +1100,18 @@ internal static class StorySync
         if (kind == (byte)StoryKind.DialogueAction)
         {
             ApplyDialogueAction(key, text, number);
+            return;
+        }
+
+        if (kind == (byte)StoryKind.Flag)
+        {
+            ApplyRemoteFlag(key, number != 0, text);
+            return;
+        }
+
+        if (kind == (byte)StoryKind.QuestEvent)
+        {
+            ApplyRemoteQuestEvent(text, number);
             return;
         }
 
@@ -1507,6 +1766,8 @@ internal static class StorySync
         int consumed = Consumed.Count;
         Consumed.Clear();
         ObjectsByKey.Clear();
+        KnownFlags.Clear();
+        _flagComponent = null;
 
         if (consumed > 0)
         {
@@ -1527,6 +1788,8 @@ internal static class StorySync
         _scene = scene;
         Consumed.Clear();
         ObjectsByKey.Clear();
+        KnownFlags.Clear();
+        _flagComponent = null;
         CoopPlugin.LogSource.LogInfo($"[story] tracking scene '{scene}'.");
     }
 
@@ -1564,6 +1827,8 @@ internal enum StoryKind : byte
     Teleport = 2,
     Cutscene = 3,
     DialogueAction = 4,
+    Flag = 5,
+    QuestEvent = 6,
 }
 
 [HarmonyPatch(typeof(NPCConversation), "StartConversation")]
@@ -1668,5 +1933,119 @@ internal static class StoryGiftAtIndexPatch
     private static void Postfix(GiftGiver __instance, int __0)
     {
         StorySync.OnGiftGiven(__instance, "GiveGiftAtIndex", __0);
+    }
+}
+
+// ------------------------------------------------------------------
+// Save flags: mirror FlagsForSaveFiles.SetFlag / SetTrue / SetFalse.
+//
+// Only the string setters are authoritative; SetTrue/SetFalse usually call
+// SetFlag internally, and the value dedupe in StorySync.OnFlagChanged drops
+// the redundant second report. The int setters are resolved to a flag name
+// through the component's own flags array.
+// ------------------------------------------------------------------
+
+[HarmonyPatch(typeof(FlagsForSaveFiles), "SetFlag", new[] { typeof(string), typeof(bool) })]
+internal static class StoryFlagSetPatch
+{
+    private static void Postfix(FlagsForSaveFiles __instance, string __0, bool __1, bool __result)
+    {
+        if (__result)
+        {
+            StorySync.OnFlagChanged(__instance, __0, __1);
+        }
+    }
+}
+
+[HarmonyPatch(typeof(FlagsForSaveFiles), "SetFlag", new[] { typeof(int), typeof(bool) })]
+internal static class StoryFlagSetIndexPatch
+{
+    private static void Postfix(FlagsForSaveFiles __instance, int __0, bool __1, bool __result)
+    {
+        if (!__result)
+        {
+            return;
+        }
+
+        string name = StorySync.NameOfFlagIndex(__instance, __0);
+        if (!string.IsNullOrEmpty(name))
+        {
+            StorySync.OnFlagChanged(__instance, name, __1);
+        }
+    }
+}
+
+[HarmonyPatch(typeof(FlagsForSaveFiles), "SetTrue", new[] { typeof(string) })]
+internal static class StoryFlagSetTruePatch
+{
+    private static void Postfix(FlagsForSaveFiles __instance, string __0)
+    {
+        StorySync.OnFlagChanged(__instance, __0, true);
+    }
+}
+
+[HarmonyPatch(typeof(FlagsForSaveFiles), "SetFalse", new[] { typeof(string) })]
+internal static class StoryFlagSetFalsePatch
+{
+    private static void Postfix(FlagsForSaveFiles __instance, string __0)
+    {
+        StorySync.OnFlagChanged(__instance, __0, false);
+    }
+}
+
+[HarmonyPatch(typeof(FlagsForSaveFiles), "SetTrue", new[] { typeof(int) })]
+internal static class StoryFlagSetTrueIndexPatch
+{
+    private static void Postfix(FlagsForSaveFiles __instance, int __0)
+    {
+        string name = StorySync.NameOfFlagIndex(__instance, __0);
+        if (!string.IsNullOrEmpty(name))
+        {
+            StorySync.OnFlagChanged(__instance, name, true);
+        }
+    }
+}
+
+[HarmonyPatch(typeof(FlagsForSaveFiles), "SetFalse", new[] { typeof(int) })]
+internal static class StoryFlagSetFalseIndexPatch
+{
+    private static void Postfix(FlagsForSaveFiles __instance, int __0)
+    {
+        string name = StorySync.NameOfFlagIndex(__instance, __0);
+        if (!string.IsNullOrEmpty(name))
+        {
+            StorySync.OnFlagChanged(__instance, name, false);
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// Tutorial quest manager: mirror questmanagerTUTORIAL events.
+// ------------------------------------------------------------------
+
+[HarmonyPatch(typeof(questmanagerTUTORIAL), "triggerevent")]
+internal static class StoryQuestTriggerEventPatch
+{
+    private static void Postfix(questmanagerTUTORIAL __instance, int __0)
+    {
+        StorySync.OnQuestEvent("triggerevent", __0);
+    }
+}
+
+[HarmonyPatch(typeof(questmanagerTUTORIAL), "blockevents")]
+internal static class StoryQuestBlockEventsPatch
+{
+    private static void Postfix(questmanagerTUTORIAL __instance, int __0)
+    {
+        StorySync.OnQuestEvent("blockevents", __0);
+    }
+}
+
+[HarmonyPatch(typeof(questmanagerTUTORIAL), "unblockevents")]
+internal static class StoryQuestUnblockEventsPatch
+{
+    private static void Postfix(questmanagerTUTORIAL __instance, int __0)
+    {
+        StorySync.OnQuestEvent("unblockevents", __0);
     }
 }

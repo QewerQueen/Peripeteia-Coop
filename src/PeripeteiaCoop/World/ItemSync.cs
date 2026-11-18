@@ -101,6 +101,13 @@ internal static class ItemSync
     private static readonly HashSet<string> LocalBusyKeys = new();
     private static readonly Dictionary<string, RemoteBodyState> RemoteBodies = new();
 
+    // Key/quest items: the item a keycard/access point checks for. These are
+    // deliberately excluded from the world pickup/state sync so each player can
+    // keep their own copy and open the same locked door (see Items.ShareKeyItems).
+    private static readonly HashSet<string> KeyItemNames = new();
+    private static readonly HashSet<string> KeyItemKeys = new();
+    private static float _nextKeyRefreshTime;
+
     private static Transform? _localPlayer;
     private static ObjectHighlight? _localHighlight;
     private static string _scene = string.Empty;
@@ -144,7 +151,14 @@ internal static class ItemSync
 
         // Cache keys early. The path is stable while the item lies in the
         // world; inventory copies keep pointing at the original world item.
-        GetKey(item);
+        string key = GetKey(item);
+
+        if (IsKeyItem(item))
+        {
+            // Remember this path so a later disappearance is not broadcast
+            // either: the local copy stays behind for this player.
+            KeyItemKeys.Add(key);
+        }
     }
 
     public static void LogDropped(ItemInfo? item)
@@ -556,6 +570,17 @@ internal static class ItemSync
             return;
         }
 
+        // Key/quest items are shared: this player keeps their own copy instead of
+        // announcing the pickup, so the teammate can pick the key up too.
+        if (IsKeyItem(item))
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[items] key item '{item.ItemName}' picked up; kept local so both " +
+                "players can carry the key."
+            );
+            return;
+        }
+
         string key = GetKey(item);
         if (!key.StartsWith(_scene + "|", StringComparison.Ordinal))
         {
@@ -783,6 +808,15 @@ internal static class ItemSync
 
         if (kind == (byte)ItemEventKind.Pickup)
         {
+            if (IsKeyItemName(itemName))
+            {
+                CoopPlugin.LogSource.LogInfo(
+                    $"[items] key item '{itemName}' picked up remotely; keeping the " +
+                    "local copy for this player."
+                );
+                return;
+            }
+
             Apply(key, true, false, Vector3.zero, Quaternion.identity, false);
             return;
         }
@@ -829,6 +863,68 @@ internal static class ItemSync
         }
 
         return item.gameObject.name;
+    }
+
+    /// <summary>
+    /// True when the item is a key/quest item: an item some keycard in the scene
+    /// checks for. Key items are left out of the world pickup/state sync so both
+    /// players can carry their own copy (Items.ShareKeyItems).
+    /// </summary>
+    private static bool IsKeyItem(ItemInfo item)
+    {
+        return item != null && IsKeyItemName(item.ItemName);
+    }
+
+    private static bool IsKeyItemName(string? itemName)
+    {
+        if (!CoopPlugin.ItemsShareKeys || string.IsNullOrEmpty(itemName))
+        {
+            return false;
+        }
+
+        float now = Time.unscaledTime;
+        if (now >= _nextKeyRefreshTime)
+        {
+            _nextKeyRefreshTime = now + 3.0f;
+            RefreshKeyItemNames();
+        }
+
+        return KeyItemNames.Contains(itemName);
+    }
+
+    private static void RefreshKeyItemNames()
+    {
+        try
+        {
+            int before = KeyItemNames.Count;
+            foreach (keycard card in UnityEngine.Object.FindObjectsOfType<keycard>())
+            {
+                if (card == null)
+                {
+                    continue;
+                }
+
+                ItemInfo? key = card.key;
+                if (key != null && !string.IsNullOrEmpty(key.ItemName))
+                {
+                    KeyItemNames.Add(key.ItemName);
+                }
+            }
+
+            if (KeyItemNames.Count != before)
+            {
+                CoopPlugin.LogSource.LogInfo(
+                    $"[items] key/quest items shared (not synced as pickups): " +
+                    $"{string.Join(", ", KeyItemNames)}."
+                );
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[items] key item scan failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
     }
 
     /// <summary>
@@ -970,6 +1066,14 @@ internal static class ItemSync
             }
 
             string key = GetKey(item);
+            if (IsKeyItem(item))
+            {
+                // Never broadcast a key item's state; each player keeps their own
+                // copy so both can open the same locked door.
+                KeyItemKeys.Add(key);
+                continue;
+            }
+
             bool activeWorld = IsWorldInstance(item);
             if (activeWorld)
             {
@@ -996,7 +1100,8 @@ internal static class ItemSync
         var staleKeys = new List<string>();
         foreach (KeyValuePair<string, ItemState> pair in LastSent)
         {
-            if (!pair.Value.Alive || groups.ContainsKey(pair.Key))
+            if (!pair.Value.Alive || groups.ContainsKey(pair.Key) ||
+                KeyItemKeys.Contains(pair.Key))
             {
                 continue;
             }
@@ -1545,10 +1650,13 @@ internal static class ItemSync
         PreviouslyKnownKeys.Clear();
         SeenActiveKeys.Clear();
         LocalBusyKeys.Clear();
+        KeyItemNames.Clear();
+        KeyItemKeys.Clear();
         _localHighlight = null;
         _nextPollTime = 0.0f;
         _nextRefreshTime = 0.0f;
         _nextLogTime = 0.0f;
+        _nextKeyRefreshTime = 0.0f;
         _loggedCount = -1;
         _sentChanges = 0;
         _appliedChanges = 0;

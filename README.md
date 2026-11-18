@@ -230,7 +230,11 @@ cd C:\Path\To\PeripeteiaCoop
   выдаёт через `ItemInfo.pickupitem`, тоже получают оба
   (`Story.ShareQuestRewards`, включено по умолчанию), поэтому награды после
   квестов у игроков совпадают. Катсцены (видео) видит вся команда
-  (`Story.SyncCutscenes`). Настраивается секцией `Story.*` в конфиге BepInEx.
+  (`Story.SyncCutscenes`). Ключевые предметы (те, что проверяет `keycard`) не
+  «забираются» одним игроком у другого: каждый оставляет свою копию ключа, так что
+  одну и ту же дверь могут открыть оба (`Items.ShareKeyItems`). Шаги обучения и
+  флаги сейва тоже синхронизируются (`Story.SyncQuestEvents`, `Story.SyncFlags`).
+  Настраивается секциями `Story.*` и `Items.ShareKeyItems` в конфиге BepInEx.
 - **Смерть не откатывает мир**: умерший встаёт на точке последнего сохранения
   (или на входе в уровень), а двери, NPC и квестовое состояние остаются как были
   — уровень не перезагружается. Управляется `Player.RespawnOnDeath`. Оживший
@@ -435,8 +439,12 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   (`Story.SyncDialogueActions`), the world-effect listeners a quest object drives
   (doors, pistons, elevators, GameObject toggles) are replayed on the other
   machine (`Story.SyncQuestEffects`), and video cutscenes are replayed on both
-  machines (`Story.SyncCutscenes`). The raw VIDE node progression itself is not
-  mirrored. Scene transitions are shared (`World.SyncSceneTransitions`): whoever
+  machines (`Story.SyncCutscenes`). Key/quest items (the item a `keycard` checks
+  for) are not taken away from the other player: each player keeps their own copy
+  of the key, so both can open the same locked door (`Items.ShareKeyItems`). The
+  tutorial quest steps and the save flags are mirrored as well
+  (`Story.SyncQuestEvents`, `Story.SyncFlags`). The raw VIDE node progression
+  itself is not mirrored. Scene transitions are shared (`World.SyncSceneTransitions`): whoever
   triggers a level change broadcasts the target scene and the other machine
   follows it, so both players enter the same next level.
 - Player death is shared (`Player.SyncDeath`): the remote body goes down where it
