@@ -152,6 +152,35 @@ Player
    `ItemSaveAdapter` и т.д.). Это фактически готовый набор состояния, которое
    нужно синхронизировать. Его стоит изучить в первую очередь.
 
+## Восприятие AI (проверено дизассемблером)
+
+- `AIController.<updateAIStatus>d__96.MoveNext` (RVA 0x327610) перебирает пары
+  фракций и для каждой пары вызывает `CheckVisionCones` в обе стороны; для
+  фракции `f == 0` (`Player`) вторая проверка идёт с `isplayer = true`. Перед
+  вызовом проверяется флаг `alive` **источника** и его `snipper` (дальность
+  обзора) против расстояния между членами.
+- `CheckVisionCones` (0x2F5F90) валидирует источник, затем вызывает
+  `checkCone(this, source, target, distance, isplayer, standing)`.
+- `checkCone` (0x2FA130) **пропускает цель**, если у неё нет живого здоровья:
+  нужно `HP != null && HP.dead == 0` (0x70) **или** `DMG != null &&
+  CurrentHitPoints > 0` (0x20). Если ни того, ни другого — выход без
+  `Senses.seeTarget`. Это и была причина, по которой зарегистрированная цель без
+  `HealthScript` оставалась невидимой.
+- Позиция членов фракции обновляется каждый цикл: `member.pos` (0x5C) берётся из
+  `member.centerOfMass.position` (0x48), поэтому `addCustomTarget` достаточно
+  вызвать один раз.
+- `addCustomTarget` (0x2F79A0) полностью обнуляет структуру `factionMemberData`,
+  поэтому всё, что не передано (`HP`, `DMG`, `hboxes`, `head`), остаётся `null`;
+  `alive` выставляется в `1`, `sight`/`snipper` — в `sightRange` (у игрока это
+  `-1`). Номер фракции для словаря берётся из четвёртого аргумента (`fact`).
+  Порядок аргументов: `(bool add, Transform centerOfMass, float sightRange,
+  int fact, EnemyController ec, HealthScript HP, damageScript dmg, AITarget
+  aiTarget, Senses senses, HitBoxes hboxes)`.
+- `AITarget`/`createMemberData` (0x2FB840) — игровой путь регистрации игрока: у
+  игрока `HP = null`, а `DMG` берётся из `AITarget.DMG` (`damageScript`),
+  `hboxes` — из `GetComponentInChildren<HitBoxes>()`, `head` — из
+  `hboxes[0x58] ?? centerOfMass`.
+
 ## Следующие шаги реверса
 
 - Разобрать `CameraPivot`, `Shoot`, `HealthScript`, `AugSelect`, `SaveSystem`
