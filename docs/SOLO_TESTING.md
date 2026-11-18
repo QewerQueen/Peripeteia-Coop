@@ -192,7 +192,7 @@ BepInEx/LogOutput.1.log
 [doors] registered=18 scene='tutorial'.
 [items] known=... groups=... scene='...'
 [weapon] local item='...' template='...' hash=...
-[sync] enemies mirrored=... deaths=.../... story=.../... storyEffects=... playerDeaths=.../...
+[sync] enemies mirrored=... deaths=.../... story=.../... storyEffects=... playerDeaths=.../... saveLoads=.../...
 [ai] remote player 1 registered as a target on '...'
 [story] dialogue consumed: '...'
 [story] applied remote QuestAction '...' (objects=2)
@@ -213,6 +213,8 @@ BepInEx/LogOutput.1.log
 [death] save point (level start) recorded at (x, y, z).
 [death] respawned at the save point (x, y, z) (world kept, no reload).
 [save] Client blocked an in-level load: rolling back alone would desync the shared world. Only the host can rewind a save.
+[save] Host rolled back to 'Save 3'; asking the other player to load it too.
+[save] Following the host's rollback to 'Save 3'.
 [net] ... poses: 1@(x,y,z)
 ```
 
@@ -253,6 +255,11 @@ Enabled = true
 сейву): `SaveHandler.LoadProcedure` возвращает `false`, пока это не стартовая
 загрузка, переход между сценами или смерть. Иначе у клиента откатилась бы
 только его копия общего мира. Отключается ключом `Client.BlockRollback`.
+
+Откат — решение хоста, и клиента он тянет за собой: хост шлёт пакет `SaveLoad`
+с именем сейва, а клиент грузит тот же сейв (в логе хоста
+`[save] Host rolled back to '...'`, в логе клиента
+`[save] Following the host's rollback to '...'`).
 
 Смерть больше не перезагружает уровень: `SaveHandler.LoadProcedureFromDeath`
 перехватывается и игрок встаёт на точке последнего сохранения, а мир остаётся

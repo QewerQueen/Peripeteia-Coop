@@ -36,6 +36,17 @@ internal static class DeathRespawn
     public static bool Enabled =>
         CoopPlugin.Settings.Role != CoopRole.Offline && CoopPlugin.PlayerRespawnOnDeath;
 
+    /// <summary>
+    /// Called when a save is loaded (by either machine) so the respawn point is
+    /// re-read from wherever the loaded save puts the player.
+    /// </summary>
+    public static void OnLoad()
+    {
+        _scene = string.Empty;
+        _sceneRecorded = false;
+        _hasSavePoint = false;
+    }
+
     /// <summary>Watches for level changes so each scene gets its own save point.</summary>
     public static void Tick(PlayerMovement? localPlayer)
     {
@@ -289,34 +300,5 @@ internal static class DeathSavePointAutosavePatch
     private static void Postfix()
     {
         DeathRespawn.RecordSavePoint("level autosave");
-    }
-}
-
-/// <summary>
-/// A co-op client must not load a save mid-level on its own: the client's copy
-/// of the shared world (doors, NPCs, quest state) would rewind while the host's
-/// did not. The initial load from the main menu, scene transitions and the
-/// death path are still allowed.
-/// </summary>
-[HarmonyPatch(typeof(SaveHandler), "LoadProcedure")]
-internal static class ClientBlockRollbackPatch
-{
-    private static bool Prefix(SaveHandler __instance, bool enteringScene, bool fromDEAD)
-    {
-        if (!CoopPlugin.ShouldBlockClientRollback)
-        {
-            return true;
-        }
-
-        if (enteringScene || fromDEAD || __instance.onMainMenuScene)
-        {
-            return true;
-        }
-
-        CoopPlugin.LogSource.LogInfo(
-            "[save] Client blocked an in-level load: rolling back alone would " +
-            "desync the shared world. Only the host can rewind a save."
-        );
-        return false;
     }
 }

@@ -35,6 +35,7 @@ internal sealed class CoopNetwork : IDisposable
         EnemyDeath = 11,
         StoryEvent = 12,
         PlayerDeath = 13,
+        SaveLoad = 14,
     }
 
     [Flags]
@@ -50,7 +51,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 17;
+    private const int ProtocolVersion = 18;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
 
@@ -299,7 +300,8 @@ internal sealed class CoopNetwork : IDisposable
                 CoopPlugin.LogSource.LogInfo(
                     $"[sync] enemies mirrored={EnemySync.MirrorsSent} deaths={EnemySync.DeathsSent}/{EnemySync.DeathsApplied} " +
                     $"aiTargets={AiTargeting.RegisteredCount} story={StorySync.EventsSent}/{StorySync.EventsApplied} " +
-                    $"storyEffects={StorySync.EffectsApplied} playerDeaths={PlayerStateSync.DeathsSent}/{PlayerStateSync.DeathsApplied}"
+                    $"storyEffects={StorySync.EffectsApplied} playerDeaths={PlayerStateSync.DeathsSent}/{PlayerStateSync.DeathsApplied} " +
+                    $"saveLoads={SaveLoadSync.LoadsRequested}/{SaveLoadSync.LoadsApplied}"
                 );
             }
         }
@@ -1357,7 +1359,39 @@ internal sealed class CoopNetwork : IDisposable
             case PacketType.StoryEvent:
                 ReceiveStoryEvent(peer, reader);
                 break;
+
+            case PacketType.SaveLoad:
+                ReceiveSaveLoad(peer, reader);
+                break;
         }
+    }
+
+    /// <summary>
+    /// Host only: tells every client which save the host just rolled back to, so
+    /// both machines rewind the shared world together.
+    /// </summary>
+    public void SendSaveLoad(string saveName)
+    {
+        if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.SaveLoad);
+        writer.Put(saveName ?? string.Empty);
+        _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    private void ReceiveSaveLoad(NetPeer peer, NetDataReader reader)
+    {
+        if (_settings.Role == CoopRole.Host)
+        {
+            return;
+        }
+
+        string saveName = reader.GetString();
+        SaveLoadSync.ApplyRemoteLoad(saveName);
     }
 
     private void ReceiveHello(NetPeer peer, NetDataReader reader)

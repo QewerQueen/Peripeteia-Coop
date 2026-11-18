@@ -322,7 +322,7 @@ public sealed class CoopPlugin : BasePlugin
             "Client",
             "BlockRollback",
             true,
-            "Stop a co-op client from loading a save mid-level on its own; that would rewind the client's copy of the shared world and desync it from the host. The initial load, scene transitions and the death respawn are still allowed."
+            "Stop a co-op client from loading a save mid-level on its own; that would rewind the client's copy of the shared world and desync it from the host. A rollback is a host decision: the host loads the save and the client loads the same one on request. The initial load and scene transitions are still allowed."
         ).Value;
 
         Settings = CoopSettings.Parse(Environment.GetCommandLineArgs());
@@ -454,7 +454,7 @@ public sealed class CoopPlugin : BasePlugin
             TryPatch(typeof(DeathSavePointSavePatch));
             TryPatch(typeof(DeathSavePointQueuedPatch));
             TryPatch(typeof(DeathSavePointAutosavePatch));
-            TryPatch(typeof(ClientBlockRollbackPatch));
+            TryPatch(typeof(SaveLoadProcedurePatch));
         }
 
         LogSource.LogInfo(

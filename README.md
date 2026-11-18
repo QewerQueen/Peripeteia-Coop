@@ -227,8 +227,9 @@ cd C:\Path\To\PeripeteiaCoop
   (или на входе в уровень), а двери, NPC и квестовое состояние остаются как были
   — уровень не перезагружается. Управляется `Player.RespawnOnDeath`. Тело
   убитого напарника падает как ragdoll и **не обыскивается**. Сознательный
-  откат к другому сохранению делает только хост; клиент не может откатить мир
-  в одиночку (`Client.BlockRollback`), чтобы не разойтись с хостом.
+  откат к другому сохранению — решение хоста: хост грузит сейв и **тянет клиента
+  за собой** (тот грузит тот же сейв). Клиент не может откатить мир в одиночку
+  (`Client.BlockRollback`), чтобы не разойтись с хостом.
 - **Брошенная бутылка разбивается у обоих**: удар и разбитие (`BottleBreak`,
   `genericbreakable`) передаются мгновенным надёжным событием, поэтому осколки
   видит и тот, кто не бросал.
@@ -306,8 +307,9 @@ NullReferenceException
   клиент сможет затереть сохранение хоста.
 - **Клиент не может откатиться к другому сохранению посреди уровня** — так и
   задумано (`Client.BlockRollback`): откат откатил бы только его копию общего
-  мира и разошёлся бы с хостом. Откатывается хост, либо отключи ключ, если
-  тестируешь в одиночку.
+  мира и разошёлся бы с хостом. Откатывается хост, и клиент **сам загрузит тот
+  же сейв** по его команде (в логе `[save] Following the host's rollback to ...`).
+  Если отключить ключ, клиент сможет откатываться сам — но тогда миры разойдутся.
 - **После смерти уровень не перезагружается, игрок встаёт на точке сохранения**
   — это `Player.RespawnOnDeath`. Если хочется старого поведения (полная
   перезагрузка уровня), выключи ключ.
@@ -391,9 +393,10 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
 - Dying no longer reloads the level (`Player.RespawnOnDeath`): the player stands
   back up at the last save point (or where they entered the level) and the shared
   world keeps its doors, NPCs and quest state. A deliberate rollback to another
-  save is host-only; a client cannot load a save mid-level on its own
-  (`Client.BlockRollback`) because that would rewind its copy of the world and
-  desync it.
+  save is a host decision: the host loads the save and the client is told to load
+  the same one, so both worlds rewind together (`SaveLoadSync`). A client cannot
+  load a save mid-level on its own (`Client.BlockRollback`) because that would
+  rewind only its copy of the world and desync it.
 - Both instances must enter the same level manually.
 - Both players need the same mod version and game version; the handshake rejects
   mismatches. A client reconnects automatically after a host restart, but the
