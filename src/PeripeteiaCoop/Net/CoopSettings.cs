@@ -43,6 +43,14 @@ internal sealed class CoopSettings
 
     public bool DoorTest { get; private set; }
 
+    /// <summary>
+    /// Debug-only solo test mode: a scene name to jump to once the session is up,
+    /// so a retest can prove that a level transition is shared with the other
+    /// machine without having to find a level exit. Never set unless
+    /// -coop-scene-test is passed.
+    /// </summary>
+    public string SceneTest { get; private set; } = string.Empty;
+
     public bool GameAnimator { get; private set; } = true;
 
     public string LoadSaveName { get; private set; } = string.Empty;
@@ -110,6 +118,14 @@ internal sealed class CoopSettings
                 case "-coop-door-test":
                 case "--coop-door-test":
                     settings.DoorTest = true;
+                    break;
+
+                case "-coop-scene-test":
+                case "--coop-scene-test":
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+                    {
+                        settings.SceneTest = args[++i];
+                    }
                     break;
 
                 case "-coop-game-animator":

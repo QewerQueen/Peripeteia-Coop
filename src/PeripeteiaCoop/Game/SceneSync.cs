@@ -138,6 +138,74 @@ internal static class SceneSync
         _lastSentTime = 0.0f;
     }
 
+    private static bool _testDone;
+    private static float _testAt;
+
+    /// <summary>
+    /// Debug-only (<c>-coop-scene-test NAME</c>): once both players are in and the
+    /// level has settled, walk this machine through the real loading-screen
+    /// transition to <c>NAME</c>. That is the same funnel every level exit uses, so
+    /// a retest can prove the other player follows without hunting for a door.
+    /// Host only, and only when the flag is set.
+    /// </summary>
+    public static void MaybeRunTest(bool ready)
+    {
+        if (_testDone ||
+            !Enabled ||
+            CoopPlugin.Settings.Role != CoopRole.Host ||
+            string.IsNullOrEmpty(CoopPlugin.Settings.SceneTest))
+        {
+            return;
+        }
+
+        if (!ready)
+        {
+            _testAt = 0.0f;
+            return;
+        }
+
+        if (_testAt <= 0.0f)
+        {
+            _testAt = Time.unscaledTime + 20.0f;
+            return;
+        }
+
+        if (Time.unscaledTime < _testAt)
+        {
+            return;
+        }
+
+        _testDone = true;
+
+        string target = CoopPlugin.Settings.SceneTest;
+        string current = SceneManager.GetActiveScene().name;
+        if (string.Equals(current, target, StringComparison.Ordinal))
+        {
+            CoopPlugin.LogSource.LogInfo($"[scene] test target '{target}' is already the active scene.");
+            return;
+        }
+
+        CoopPlugin.LogSource.LogInfo($"[scene] test: forcing a transition from '{current}' to '{target}'.");
+        try
+        {
+            LoadingScreen? screen = UnityEngine.Object.FindObjectOfType<LoadingScreen>();
+            if (screen != null)
+            {
+                screen.loadLevel(target, false);
+            }
+            else
+            {
+                SceneManager.LoadScene(target);
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[scene] test transition failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
     private static bool IsMenuScene(string sceneName)
     {
         return sceneName.IndexOf("menu", StringComparison.OrdinalIgnoreCase) >= 0;

@@ -284,6 +284,7 @@ internal sealed class CoopNetwork : IDisposable
         }
 
         ApplyAutoPilot(localPlayer);
+        SceneSync.MaybeRunTest(localPlayer != null && ConnectedPeersCount > 0);
 
         if (localPlayer != null)
         {
