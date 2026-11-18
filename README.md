@@ -184,10 +184,12 @@ cd C:\Path\To\PeripeteiaCoop
   подбор скрывает предмет у второго игрока, бросок возвращает его, а
   перетаскивание двигает. Подбор и бросок дополнительно шлют мгновенное
   надёжное событие, так что «передать» предмет другому игроку можно сразу.
-  Выброшенный предмет, которого у второго игрока не было (например награда из
-  диалога), клонируется из подходящего шаблона — `Items.SpawnMissing` включён по
-  умолчанию. Это прототип по принципу «побеждает последний изменивший»;
-  содержимое инвентаря и владение предметом не передаются.
+  **Разбитие** (бутылка, хрупкий проп) тоже передаётся: осколки видит и тот,
+  кто не бросал. Выброшенный предмет, которого у второго игрока не было
+  (например награда из диалога), клонируется из подходящего шаблона —
+  `Items.SpawnMissing` включён по умолчанию. Это прототип по принципу
+  «побеждает последний изменивший»; содержимое инвентаря и владение предметом
+  не передаются.
 - **Урон и столкновения между игроками** работают: у удалённого персонажа есть
   физический прокси (капсула тела + сфера головы), поэтому в него можно
   попасть и он становится твёрдым. Попадание отправляется владельцу, а урон
@@ -204,18 +206,32 @@ cd C:\Path\To\PeripeteiaCoop
   пока локальные.
 - **NPC и враги синхронизируются от хоста**: хост симулирует AI, клиент
   повторяет позицию, поворот, анимацию и здоровье. Движение клиент сглаживает
-  каждый кадр, а анимация не перезапускается на каждом пакете, поэтому NPC не
-  дёргаются. Убийство NPC одним игроком засчитывается обоим. Настраивается
-  секцией `Ai.*` в конфиге BepInEx.
+  каждый кадр, а анимация больше не перезапускается на каждом пакете: хост
+  передаёт **параметры Animator** (float/int/bool), и клиент проигрывает те же
+  клипы своей собственной машиной состояний, поэтому NPC ходят, стреляют и
+  умирают с анимацией. Animator зеркальных NPC принудительно переводится в
+  `AlwaysAnimate`, чтобы они не замирали вне экрана. Убийство NPC одним игроком
+  засчитывается обоим. Настраивается секцией `Ai.*` в конфиге BepInEx.
 - **Сюжет идёт по одной общей ветке**: диалог, квестовый объект или скриптовый
   телепорт «забирает» тот игрок, кто дошёл до него первым; второй в это уже не
   может вмешаться, поэтому квестовые предметы и награды не выдаются дважды.
   Диалог при этом стартует только у того, кто реально стоит у NPC. Мировые
   последствия квестового объекта (что включилось/выключилось) повторяются у
   второго игрока, так что открытые двери и появившиеся объекты видны обоим.
-  Стартовое оружие и экипировку получают оба игрока (`Story.ShareItemRewards`),
-  катсцены (видео) видит вся команда (`Story.SyncCutscenes`). Настраивается
-  секцией `Story.*` в конфиге BepInEx.
+  Стартовое оружие и экипировку получают оба игрока как **один и тот же набор**
+  (`Story.ShareItemRewards`): повторяются только те выдачи, которыми игра сама
+  вручает предметы (`GiftGiver`), а мировые предметы не дублируются — поэтому
+  клиент больше не получает второй Макаров. Катсцены (видео) видит вся команда
+  (`Story.SyncCutscenes`). Настраивается секцией `Story.*` в конфиге BepInEx.
+- **Смерть не откатывает мир**: умерший встаёт на точке последнего сохранения
+  (или на входе в уровень), а двери, NPC и квестовое состояние остаются как были
+  — уровень не перезагружается. Управляется `Player.RespawnOnDeath`. Тело
+  убитого напарника падает как ragdoll и **не обыскивается**. Сознательный
+  откат к другому сохранению делает только хост; клиент не может откатить мир
+  в одиночку (`Client.BlockRollback`), чтобы не разойтись с хостом.
+- **Брошенная бутылка разбивается у обоих**: удар и разбитие (`BottleBreak`,
+  `genericbreakable`) передаются мгновенным надёжным событием, поэтому осколки
+  видит и тот, кто не бросал.
 - **Телепорты**: телепортер, в который игрок просто входит, повторяемый и
   локальный — каждый переносится сам. Телепорт, вызванный скриптом (не входом),
   считается одноразовым и переносит **обоих** игроков.
@@ -288,6 +304,13 @@ NullReferenceException
 - **Клиент не может загрузить уровень или начать новую игру** — временно
   поставь `BlockSaves = false` в `BepInEx\config\peripeteia.coop.cfg`. Но тогда
   клиент сможет затереть сохранение хоста.
+- **Клиент не может откатиться к другому сохранению посреди уровня** — так и
+  задумано (`Client.BlockRollback`): откат откатил бы только его копию общего
+  мира и разошёлся бы с хостом. Откатывается хост, либо отключи ключ, если
+  тестируешь в одиночку.
+- **После смерти уровень не перезагружается, игрок встаёт на точке сохранения**
+  — это `Player.RespawnOnDeath`. Если хочется старого поведения (полная
+  перезагрузка уровня), выключи ключ.
 - **Предметы в инвентаре, оружие, патроны или деньги ведут себя по-разному** —
   это ожидаемо: инвентарь, экипировка, патроны и деньги у каждого игрока свои.
   Общими являются двери, мировые предметы, NPC/враги, сюжетная ветка и урон между
@@ -330,13 +353,17 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
 - Skins, inventory contents, equipment ownership and the other player's item
   list are not synchronized.
 - Doors and a prototype layer for world items already present in the scene are
-  networked. Pickup/drop also send an immediate reliable event. Item sync is
+  networked. Pickup/drop also send an immediate reliable event, and a broken
+  bottle (or another breakable prop) breaks on both machines. Item sync is
   last-writer-wins; containers can still diverge. A dropped item the other side
   never had is cloned from a matching template (`Items.SpawnMissing`, on by
   default).
 - NPCs and enemies are mirrored host-authoritatively (`Ai.*` config) and deaths
-  are shared. Mirrored actors are eased towards each snapshot every frame and
-  their animation is not restarted on every packet, so they move smoothly. The
+  are shared. Mirrored actors are eased towards each snapshot every frame and the
+  host's Animator parameters (float/int/bool) are copied onto the client, which
+  runs the same state machine locally, so the actors keep their locomotion and
+  attack animation. Mirrored Animators are forced to `AlwaysAnimate` and the host
+  keeps nearby actors animating, so the snapshot is never a frozen statue. The
   host also registers the remote player as an AI target
   (`Ai.TargetRemotePlayer`, experimental) so enemies can notice, chase and shoot
   at the client; the client still takes no AI damage from the host's simulation,
@@ -346,19 +373,27 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   and the world GameObjects it switches are replayed on the other machine. A
   dialogue also only starts for the player actually standing at the NPC. Quest
   items and rewards therefore stay on the player who triggered them, except the
-  starting weapons and equipment, which both players receive
-  (`Story.ShareItemRewards`). The quest-log effects of a dialogue branch are
-  shared too (`Story.SyncDialogueActions`), the world-effect listeners a quest
-  object drives (doors, pistons, elevators, GameObject toggles) are replayed on
-  the other machine (`Story.SyncQuestEffects`), and video cutscenes are replayed
-  on both machines (`Story.SyncCutscenes`). The raw VIDE node progression itself
-  is not mirrored, and scene transitions are still local to each instance.
+  starting weapons and equipment, which both players receive as the same set
+  (`Story.ShareItemRewards`): only the game's own gift listeners are replayed,
+  never world pickups, so the teammate cannot end up with a duplicate weapon. The
+  quest-log effects of a dialogue branch are shared too
+  (`Story.SyncDialogueActions`), the world-effect listeners a quest object drives
+  (doors, pistons, elevators, GameObject toggles) are replayed on the other
+  machine (`Story.SyncQuestEffects`), and video cutscenes are replayed on both
+  machines (`Story.SyncCutscenes`). The raw VIDE node progression itself is not
+  mirrored, and scene transitions are still local to each instance.
 - Player death is shared (`Player.SyncDeath`): the remote body goes down where it
   fell and stands back up on revive. The game's own baked ragdoll rig is used
   (`Player.DeathRagdoll`); the ragdoll colliders are moved onto the layer of the
   surface under the body so the corpse does not fall through the floor. If the
   model has no rig the body simply stops animating. A dead teammate cannot be
   searched or looted.
+- Dying no longer reloads the level (`Player.RespawnOnDeath`): the player stands
+  back up at the last save point (or where they entered the level) and the shared
+  world keeps its doors, NPCs and quest state. A deliberate rollback to another
+  save is host-only; a client cannot load a save mid-level on its own
+  (`Client.BlockRollback`) because that would rewind its copy of the world and
+  desync it.
 - Both instances must enter the same level manually.
 - Both players need the same mod version and game version; the handshake rejects
   mismatches. A client reconnects automatically after a host restart, but the

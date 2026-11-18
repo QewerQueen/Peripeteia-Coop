@@ -50,7 +50,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 16;
+    private const int ProtocolVersion = 17;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
 
@@ -59,6 +59,13 @@ internal sealed class CoopNetwork : IDisposable
     private readonly NetManager _net;
     private readonly Dictionary<int, RemoteAvatar> _avatars = new();
     private readonly Dictionary<NetPeer, int> _peerIds = new();
+
+    // Reusable buffers for the animator parameters in an EnemyState packet.
+    // Sized larger than EnemySync.MaxAnimatorParameters so a newer sender can
+    // never overflow them.
+    private readonly int[] _animHashes = new int[32];
+    private readonly byte[] _animTypes = new byte[32];
+    private readonly float[] _animValues = new float[32];
 
     private int _nextPeerId = 1;
     private int _localId = -1;
@@ -201,6 +208,7 @@ internal sealed class CoopNetwork : IDisposable
         EnemySync.Tick(localPlayer);
         AiTargeting.Tick(localPlayer);
         PlayerStateSync.Tick(localPlayer);
+        PlayerStateSync.FlushPending();
         StorySync.Tick(localPlayer);
 
         string localScene = localPlayer != null ? localPlayer.gameObject.scene.name : string.Empty;
@@ -602,12 +610,31 @@ internal sealed class CoopNetwork : IDisposable
         int maxHp,
         int stateHash,
         float normalizedTime,
-        float speed
+        float speed,
+        int[] animHashes,
+        byte[] animTypes,
+        float[] animValues,
+        int animCount
     )
     {
         if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
         {
             return;
+        }
+
+        if (animCount < 0)
+        {
+            animCount = 0;
+        }
+
+        if (animCount > animHashes.Length ||
+            animCount > animTypes.Length ||
+            animCount > animValues.Length)
+        {
+            animCount = Math.Min(
+                animHashes.Length,
+                Math.Min(animTypes.Length, animValues.Length)
+            );
         }
 
         var writer = new NetDataWriter();
@@ -625,6 +652,14 @@ internal sealed class CoopNetwork : IDisposable
         writer.Put(stateHash);
         writer.Put(normalizedTime);
         writer.Put(speed);
+        writer.Put((byte)animCount);
+        for (int i = 0; i < animCount; i++)
+        {
+            writer.Put(animHashes[i]);
+            writer.Put(animTypes[i]);
+            writer.Put(animValues[i]);
+        }
+
         _net.SendToAll(writer, DeliveryMethod.Sequenced);
     }
 
@@ -1648,6 +1683,19 @@ internal sealed class CoopNetwork : IDisposable
         float normalizedTime = reader.GetFloat();
         float speed = reader.GetFloat();
 
+        int animCount = reader.GetByte();
+        if (animCount > _animHashes.Length)
+        {
+            animCount = _animHashes.Length;
+        }
+
+        for (int i = 0; i < animCount; i++)
+        {
+            _animHashes[i] = reader.GetInt();
+            _animTypes[i] = reader.GetByte();
+            _animValues[i] = reader.GetFloat();
+        }
+
         EnemySync.ApplyState(
             key,
             position,
@@ -1656,7 +1704,11 @@ internal sealed class CoopNetwork : IDisposable
             maxHp,
             stateHash,
             normalizedTime,
-            speed
+            speed,
+            _animHashes,
+            _animTypes,
+            _animValues,
+            animCount
         );
     }
 

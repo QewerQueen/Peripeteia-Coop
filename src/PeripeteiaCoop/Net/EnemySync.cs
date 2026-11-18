@@ -35,11 +35,26 @@ internal static class EnemySync
     private const float MoveEpsilon = 0.04f;
     private const float FullResendInterval = 1.5f;
 
+    /// <summary>
+    /// Hard cap on the number of Animator parameters mirrored per actor. The
+    /// receive buffers on the other side are sized larger, so an actor with an
+    /// unusual controller can never overflow them.
+    /// </summary>
+    public const int MaxAnimatorParameters = 24;
+
+    /// <summary>
+    /// Mirrored NPCs within this distance of the local player are forced to keep
+    /// animating on the host, so the snapshot the client mirrors is live.
+    /// </summary>
+    private const float HostAnimationRadius = 60.0f;
+
     private sealed class MirrorState
     {
         public Vector3 Position;
         public Quaternion Rotation;
         public float SentAt;
+        public int StateHash;
+        public int AnimSignature;
     }
 
     /// <summary>
@@ -53,6 +68,13 @@ internal static class EnemySync
         public Vector3 Position;
         public Quaternion Rotation;
         public bool Snap;
+
+        /// <summary>
+        /// When the parameter-driven Animator state machine first failed to reach
+        /// the host's state. Used as a safety net so a trigger-based transition
+        /// cannot leave the puppet frozen.
+        /// </summary>
+        public float StateMismatchSince;
     }
 
     private static readonly Dictionary<string, EnemyController> KnownEnemies = new();
@@ -61,6 +83,13 @@ internal static class EnemySync
     private static readonly Dictionary<string, MirrorTarget> Targets = new();
     private static readonly HashSet<string> AnnouncedDead = new();
     private static readonly HashSet<int> FrozenIds = new();
+    private static readonly HashSet<int> HostAnimatedIds = new();
+
+    private static readonly Dictionary<int, AnimParamSet> ParamCache = new();
+
+    private static bool _animParamsLogged;
+
+    private static Transform? _localPlayer;
 
     private static string _scene = string.Empty;
     private static float _nextPoll;
@@ -68,6 +97,12 @@ internal static class EnemySync
     private static int _deathsSent;
     private static int _deathsApplied;
     private static int _mirrorsSent;
+
+    // Reusable buffers for sampling the host's Animator parameters. Filled in
+    // PollMirror, read by SendEnemyState, never allocated per packet.
+    private static readonly int[] AnimHashes = new int[MaxAnimatorParameters];
+    private static readonly byte[] AnimTypes = new byte[MaxAnimatorParameters];
+    private static readonly float[] AnimValues = new float[MaxAnimatorParameters];
 
     public static bool Enabled =>
         CoopPlugin.Settings.Role != CoopRole.Offline && CoopPlugin.AiEnabled;
@@ -112,6 +147,8 @@ internal static class EnemySync
             return;
         }
 
+        _localPlayer = localPlayer != null ? localPlayer.transform : null;
+
         string scene = SceneManager.GetActiveScene().name;
         if (!string.Equals(scene, _scene, StringComparison.Ordinal))
         {
@@ -147,7 +184,11 @@ internal static class EnemySync
         int maxHp,
         int stateHash,
         float normalizedTime,
-        float speed
+        float speed,
+        int[] animHashes,
+        byte[] animTypes,
+        float[] animValues,
+        int animCount
     )
     {
         if (CoopPlugin.Settings.Role != CoopRole.Client || !Enabled)
@@ -187,32 +228,98 @@ internal static class EnemySync
         }
 
         Animator? animator = enemy.anim;
-        if (animator != null && animator.runtimeAnimatorController != null && stateHash != 0)
+        if (animator != null && animator.runtimeAnimatorController != null)
         {
             try
             {
                 animator.speed = speed > 0.01f ? speed : 1.0f;
-
-                // Only restart the clip when the state actually changed. Calling
-                // Play with the host's normalized time on every packet reset the
-                // animation several times a second, which is why the mirrored
-                // NPCs looked like they had no animation at all.
-                AnimatorStateInfo current = animator.GetCurrentAnimatorStateInfo(0);
-                bool sameState = current.fullPathHash == stateHash;
-                bool drifted =
-                    Mathf.Abs(
-                        Mathf.Repeat(current.normalizedTime, 1.0f) -
-                        Mathf.Repeat(normalizedTime, 1.0f)
-                    ) > 0.25f;
-
-                if (!sameState || drifted)
+                if (!animator.enabled)
                 {
-                    animator.Play(stateHash, 0, normalizedTime);
+                    animator.enabled = true;
+                }
+
+                // The client's own AI is frozen, so nothing drives its Animator
+                // parameters any more. Without this the state machine sat in
+                // whatever state it was in when the AI stopped, which is why the
+                // mirrored NPCs looked like unanimated statues. Copying the
+                // host's parameters lets the client's own state machine play the
+                // same locomotion/attack clips.
+                bool paramsApplied = animCount > 0;
+                if (paramsApplied)
+                {
+                    ApplyAnimatorParameters(animator, animHashes, animTypes, animValues, animCount);
+                }
+
+                if (stateHash != 0)
+                {
+                    AnimatorStateInfo current = animator.GetCurrentAnimatorStateInfo(0);
+                    bool sameState = current.fullPathHash == stateHash;
+                    bool drifted =
+                        Mathf.Abs(
+                            Mathf.Repeat(current.normalizedTime, 1.0f) -
+                            Mathf.Repeat(normalizedTime, 1.0f)
+                        ) > 0.25f;
+
+                    if (!paramsApplied)
+                    {
+                        // No parameters to drive the machine: fall back to
+                        // playing the host's clip directly. Only restart when the
+                        // state really changed; calling Play every packet reset
+                        // the animation several times a second.
+                        if (!sameState || drifted)
+                        {
+                            animator.Play(stateHash, 0, normalizedTime);
+                        }
+                    }
+                    else if (!sameState)
+                    {
+                        // The parameters should have moved the machine to the
+                        // host's state. If a trigger-based transition keeps it
+                        // elsewhere, force the clip after a short grace period.
+                        if (target.StateMismatchSince <= 0.0f)
+                        {
+                            target.StateMismatchSince = Time.unscaledTime;
+                        }
+                        else if (Time.unscaledTime - target.StateMismatchSince > 0.6f)
+                        {
+                            animator.Play(stateHash, 0, normalizedTime);
+                            target.StateMismatchSince = 0.0f;
+                        }
+                    }
+                    else
+                    {
+                        target.StateMismatchSince = 0.0f;
+                    }
                 }
             }
             catch (Exception)
             {
                 // Animator hash from a different controller revision; ignore.
+            }
+        }
+    }
+
+    private static void ApplyAnimatorParameters(
+        Animator animator,
+        int[] hashes,
+        byte[] types,
+        float[] values,
+        int count
+    )
+    {
+        for (int i = 0; i < count; i++)
+        {
+            switch ((AnimatorControllerParameterType)types[i])
+            {
+                case AnimatorControllerParameterType.Float:
+                    animator.SetFloat(hashes[i], values[i]);
+                    break;
+                case AnimatorControllerParameterType.Int:
+                    animator.SetInteger(hashes[i], (int)values[i]);
+                    break;
+                case AnimatorControllerParameterType.Bool:
+                    animator.SetBool(hashes[i], values[i] > 0.5f);
+                    break;
             }
         }
     }
@@ -319,6 +426,9 @@ internal static class EnemySync
         Targets.Clear();
         AnnouncedDead.Clear();
         FrozenIds.Clear();
+        HostAnimatedIds.Clear();
+        ParamCache.Clear();
+        _animParamsLogged = false;
         _firstPoll = true;
         CoopPlugin.LogSource.LogInfo($"[ai] enemy sync tracking scene '{scene}'.");
     }
@@ -378,6 +488,7 @@ internal static class EnemySync
             if (EnemyIds.TryGetValue(key, out int id))
             {
                 FrozenIds.Remove(id);
+                HostAnimatedIds.Remove(id);
             }
 
             KnownEnemies.Remove(key);
@@ -439,6 +550,8 @@ internal static class EnemySync
                 continue;
             }
 
+            EnsureHostAnimation(enemy);
+
             Vector3 position;
             Quaternion rotation;
             int stateHash = 0;
@@ -456,6 +569,7 @@ internal static class EnemySync
             }
 
             Animator? animator = enemy.anim;
+            int animCount = 0;
             if (animator != null && animator.runtimeAnimatorController != null)
             {
                 try
@@ -469,7 +583,12 @@ internal static class EnemySync
                 {
                     stateHash = 0;
                 }
+
+                animCount = SampleAnimatorParameters(animator);
+                LogAnimatorParametersOnce(animator, enemy);
             }
+
+            int animSignature = AnimSignature(animCount);
 
             if (!LastMirror.TryGetValue(pair.Key, out MirrorState? last) || last == null)
             {
@@ -478,8 +597,10 @@ internal static class EnemySync
             }
 
             bool moved = Vector3.Distance(last.Position, position) > MoveEpsilon;
+            bool animChanged =
+                stateHash != last.StateHash || animSignature != last.AnimSignature;
             bool stale = now - last.SentAt >= FullResendInterval;
-            if (!moved && !stale)
+            if (!moved && !animChanged && !stale)
             {
                 continue;
             }
@@ -487,6 +608,8 @@ internal static class EnemySync
             last.Position = position;
             last.Rotation = rotation;
             last.SentAt = now;
+            last.StateHash = stateHash;
+            last.AnimSignature = animSignature;
             _mirrorsSent++;
 
             CoopPlugin.Network?.SendEnemyState(
@@ -497,8 +620,234 @@ internal static class EnemySync
                 health != null ? health.maxHP : 0,
                 stateHash,
                 normalizedTime,
-                speed
+                speed,
+                AnimHashes,
+                AnimTypes,
+                AnimValues,
+                animCount
             );
+        }
+    }
+
+    /// <summary>
+    /// Samples every non-trigger Animator parameter of an actor into the shared
+    /// buffers and returns how many were written.
+    /// </summary>
+    private static int SampleAnimatorParameters(Animator animator)
+    {
+        int count = 0;
+        try
+        {
+            AnimParamSet? set = GetParamSet(animator);
+            if (set == null)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < set.Hashes.Length; i++)
+            {
+                AnimatorControllerParameterType type =
+                    (AnimatorControllerParameterType)set.Types[i];
+
+                float value;
+                switch (type)
+                {
+                    case AnimatorControllerParameterType.Float:
+                        value = animator.GetFloat(set.Hashes[i]);
+                        break;
+                    case AnimatorControllerParameterType.Int:
+                        value = animator.GetInteger(set.Hashes[i]);
+                        break;
+                    case AnimatorControllerParameterType.Bool:
+                        value = animator.GetBool(set.Hashes[i]) ? 1.0f : 0.0f;
+                        break;
+                    default:
+                        continue;
+                }
+
+                AnimHashes[count] = set.Hashes[i];
+                AnimTypes[count] = set.Types[i];
+                AnimValues[count] = value;
+                count++;
+            }
+        }
+        catch (Exception)
+        {
+            count = 0;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// The parameters of a controller, worked out once per controller.
+    /// <c>Animator.parameters</c> allocates a fresh array (and a wrapper per
+    /// parameter) on every call, and this runs for every mirrored actor several
+    /// times a second, so the descriptor list is cached by controller instance.
+    /// </summary>
+    private static AnimParamSet? GetParamSet(Animator animator)
+    {
+        RuntimeAnimatorController? controller = animator.runtimeAnimatorController;
+        if (controller == null)
+        {
+            return null;
+        }
+
+        int id = controller.GetInstanceID();
+        if (ParamCache.TryGetValue(id, out AnimParamSet? cached) && cached != null)
+        {
+            return cached;
+        }
+
+        var hashes = new List<int>(MaxAnimatorParameters);
+        var types = new List<byte>(MaxAnimatorParameters);
+        var names = new List<string>(MaxAnimatorParameters);
+
+        try
+        {
+            foreach (AnimatorControllerParameter parameter in animator.parameters)
+            {
+                AnimatorControllerParameterType type = parameter.type;
+                if (type == AnimatorControllerParameterType.Trigger)
+                {
+                    // A trigger is a one-shot event, not a readable value; it
+                    // cannot be replicated by polling.
+                    continue;
+                }
+
+                if (hashes.Count >= MaxAnimatorParameters)
+                {
+                    break;
+                }
+
+                hashes.Add(parameter.nameHash);
+                types.Add((byte)type);
+                names.Add(parameter.name ?? string.Empty);
+            }
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        var set = new AnimParamSet
+        {
+            Hashes = hashes.ToArray(),
+            Types = types.ToArray(),
+            Names = names.ToArray(),
+        };
+
+        ParamCache[id] = set;
+        return set;
+    }
+
+    private sealed class AnimParamSet
+    {
+        public int[] Hashes = Array.Empty<int>();
+        public byte[] Types = Array.Empty<byte>();
+        public string[] Names = Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// Logs the Animator parameters of the first mirrored actor once per scene.
+    /// Without it a "the NPCs still do not move" report cannot be told apart from
+    /// a controller that simply has no parameters to sync.
+    /// </summary>
+    private static void LogAnimatorParametersOnce(Animator animator, EnemyController enemy)
+    {
+        if (_animParamsLogged)
+        {
+            return;
+        }
+
+        _animParamsLogged = true;
+
+        try
+        {
+            AnimParamSet? set = GetParamSet(animator);
+            string text = "none";
+            if (set != null && set.Names.Length > 0)
+            {
+                var names = new System.Text.StringBuilder();
+                for (int i = 0; i < set.Names.Length; i++)
+                {
+                    if (names.Length > 0)
+                    {
+                        names.Append(", ");
+                    }
+
+                    names.Append(set.Names[i]);
+                    names.Append('(');
+                    names.Append((AnimatorControllerParameterType)set.Types[i]);
+                    names.Append(')');
+                }
+
+                text = names.ToString();
+            }
+
+            CoopPlugin.LogSource.LogInfo(
+                $"[sync] animator parameters for '{enemy.gameObject.name}': {text}"
+            );
+        }
+        catch (Exception)
+        {
+            // Diagnostic only.
+        }
+    }
+
+    /// <summary>Cheap signature of the sampled parameters, used to detect changes.</summary>
+    private static int AnimSignature(int count)
+    {
+        unchecked
+        {
+            int hash = 17;
+            for (int i = 0; i < count; i++)
+            {
+                hash = hash * 31 + AnimHashes[i];
+                hash = hash * 31 + AnimValues[i].GetHashCode();
+            }
+
+            return hash;
+        }
+    }
+
+    /// <summary>
+    /// Keeps the host's own copy of a mirrored NPC animating while it is near a
+    /// player. The game culls off-screen Animators by default; a culled actor
+    /// stops advancing, so the host would broadcast a frozen animation state and
+    /// the client would mirror a statue. Only actors close to the local player
+    /// are forced, so a whole level of NPCs does not have to animate at once.
+    /// </summary>
+    private static void EnsureHostAnimation(EnemyController enemy)
+    {
+        try
+        {
+            if (_localPlayer == null || _localPlayer.gameObject == null)
+            {
+                return;
+            }
+
+            if (Vector3.Distance(_localPlayer.position, enemy.transform.position) >
+                HostAnimationRadius)
+            {
+                return;
+            }
+
+            int id = enemy.GetInstanceID();
+            if (!HostAnimatedIds.Add(id))
+            {
+                return;
+            }
+
+            Animator animator = enemy.anim;
+            if (animator != null)
+            {
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            }
+        }
+        catch (Exception)
+        {
+            // Animator is optional; ignore.
         }
     }
 
@@ -535,6 +884,26 @@ internal static class EnemySync
         catch (Exception)
         {
             // Movement component is optional; the Update prefix already stops AI.
+        }
+
+        // A mirrored NPC is driven entirely by the network now, so it must keep
+        // animating even when it is off-screen. The game's default culling would
+        // otherwise pause the Animator and the puppet would look frozen.
+        try
+        {
+            Animator animator = enemy.anim;
+            if (animator != null)
+            {
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                if (!animator.enabled)
+                {
+                    animator.enabled = true;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Animator is optional on some NPC prefabs.
         }
     }
 

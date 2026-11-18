@@ -327,21 +327,27 @@ internal static class StorySync
             return;
         }
 
+        // Most cutscenes are owned by a cutsceneplayer, but a quest object can
+        // also call VideoPlayer.Play directly on a bare video (the intro's
+        // 'Cube (11)' does). In that case the video's own GameObject is the key,
+        // and the other machine plays the clip it finds there.
         cutsceneplayer? cutscene = FindCutscene(player.gameObject);
-        if (cutscene == null)
+        string key = cutscene != null
+            ? KeyOf(cutscene.transform)
+            : KeyOf(player.transform);
+
+        if (string.IsNullOrEmpty(key))
         {
             if (Time.unscaledTime - _lastCutsceneProbe > 2.0f)
             {
                 _lastCutsceneProbe = Time.unscaledTime;
                 CoopPlugin.LogSource.LogInfo(
-                    $"[story] video '{player.gameObject.name}' has no cutsceneplayer nearby; not shared."
+                    $"[story] video '{player.gameObject.name}' is not a scene object; not shared."
                 );
             }
 
             return;
         }
-
-        string key = KeyOf(cutscene.transform);
         if (string.Equals(key, _lastCutsceneKey, StringComparison.Ordinal) &&
             Time.unscaledTime - _lastCutsceneTime < 2.0f)
         {
@@ -427,6 +433,23 @@ internal static class StorySync
         {
             cutsceneplayer? cutscene = FindCutscene(target);
             VideoPlayer? player = cutscene != null ? cutscene.vp : null;
+
+            // A bare video (no cutsceneplayer) is played from the target itself.
+            if (player == null)
+            {
+                player = target.GetComponent<VideoPlayer>();
+            }
+
+            if (player == null)
+            {
+                player = target.GetComponentInChildren<VideoPlayer>(true);
+            }
+
+            if (player == null)
+            {
+                player = target.GetComponentInParent<VideoPlayer>();
+            }
+
             if (player == null)
             {
                 return;
@@ -546,7 +569,21 @@ internal static class StorySync
         return string.Equals(method, "SetQuestLog", StringComparison.Ordinal)
             || string.Equals(method, "RemoveQuestLog", StringComparison.Ordinal)
             || string.Equals(method, "setSituation", StringComparison.Ordinal)
-            || string.Equals(method, "VIDE_Override", StringComparison.Ordinal);
+            || string.Equals(method, "VIDE_Override", StringComparison.Ordinal)
+            || IsSharedDialogueGiftMethod(method);
+    }
+
+    /// <summary>
+    /// A dialogue branch can also hand the player their starting equipment
+    /// through a GiftGiver (the intro camo, for example). Those are replayed so
+    /// the teammate receives the same kit, while every other item/reward action
+    /// stays single.
+    /// </summary>
+    private static bool IsSharedDialogueGiftMethod(string method)
+    {
+        return CoopPlugin.StoryShareItemRewards &&
+            (string.Equals(method, "GiveAllGifts", StringComparison.Ordinal) ||
+             string.Equals(method, "GiveGiftAtIndex", StringComparison.Ordinal));
     }
 
     private static void ApplyDialogueAction(string gameObjectName, string method, int number)
@@ -561,6 +598,12 @@ internal static class StorySync
         GameObject? target = FindObjectByName(gameObjectName);
         if (target == null)
         {
+            return;
+        }
+
+        if (IsSharedDialogueGiftMethod(method))
+        {
+            ApplyDialogueGift(target, gameObjectName, method, number);
             return;
         }
 
@@ -607,6 +650,54 @@ internal static class StorySync
         {
             CoopPlugin.LogSource.LogWarning(
                 $"[story] dialogue effect replay failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+        finally
+        {
+            _suppressBroadcast = false;
+        }
+    }
+
+    private static void ApplyDialogueGift(
+        GameObject target,
+        string gameObjectName,
+        string method,
+        int number
+    )
+    {
+        try
+        {
+            _suppressBroadcast = true;
+            if (string.Equals(method, "GiveGiftAtIndex", StringComparison.Ordinal))
+            {
+                Il2CppSystem.Object? boxed = BoxArgument(number);
+                if (boxed == null)
+                {
+                    return;
+                }
+
+                target.SendMessage(
+                    method,
+                    boxed,
+                    SendMessageOptions.DontRequireReceiver
+                );
+            }
+            else
+            {
+                target.SendMessage(method, SendMessageOptions.DontRequireReceiver);
+            }
+
+            _eventsApplied++;
+            CoopPlugin.LogSource.LogInfo(
+                $"[story] applied remote dialogue item reward " +
+                $"'{gameObjectName}.{method}({number})'."
+            );
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[story] dialogue item reward replay failed: " +
+                $"{exception.GetType().Name}: {exception.Message}"
             );
         }
         finally
@@ -839,13 +930,19 @@ internal static class StorySync
         return WorldEffectTypes.Contains(typeName);
     }
 
-    // Listeners that hand supplies to the player. Replaying these is what gives
-    // the teammate the same starting weapons and equipment the first player
-    // received. Gated behind Story.ShareItemRewards because it can duplicate a
-    // unique quest item.
+    // Listeners that hand supplies directly to the player. Replaying these is
+    // what gives the teammate the same starting weapons and equipment the first
+    // player received, because in Peripeteia the intro hands the kit out through
+    // a GiftGiver.
+    //
+    // ItemInfo.pickupitem is deliberately NOT replayed: it picks up a shared
+    // world object, and the world object is already shared and hidden/picked up
+    // through ItemSync. Replaying it made the receiver grab the same Makarov a
+    // second time (once from the world copy, once from the gift) and end up with
+    // two pistols instead of the host's set. Gated behind Story.ShareItemRewards
+    // because a gift can still duplicate a unique quest item.
     private static readonly HashSet<string> ItemRewardTypes = new(StringComparer.Ordinal)
     {
-        "ItemInfo",
         "GiftGiver",
     };
 
@@ -856,8 +953,7 @@ internal static class StorySync
             return false;
         }
 
-        return string.Equals(method, "pickupitem", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(method, "GiveAllGifts", StringComparison.OrdinalIgnoreCase)
+        return string.Equals(method, "GiveAllGifts", StringComparison.OrdinalIgnoreCase)
             || string.Equals(method, "GiveGiftAtIndex", StringComparison.OrdinalIgnoreCase);
     }
 

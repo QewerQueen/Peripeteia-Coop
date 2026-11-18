@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace PeripeteiaCoop;
@@ -28,6 +29,21 @@ internal static class PlayerStateSync
     private static float _nextResendTime;
     private static int _deathsSent;
     private static int _deathsApplied;
+
+    /// <summary>
+    /// Deaths that arrived before the remote puppet existed. The sender keeps
+    /// resending while dead, but a player can die within the first second of a
+    /// level, so the state is remembered and applied as soon as the puppet
+    /// spawns instead of being dropped.
+    /// </summary>
+    private static readonly Dictionary<int, PendingDeath> Pending = new();
+
+    private struct PendingDeath
+    {
+        public bool Dead;
+        public Vector3 Position;
+        public Quaternion Rotation;
+    }
 
     public static bool Enabled =>
         CoopPlugin.Settings.Role != CoopRole.Offline && CoopPlugin.PlayerSyncDeath;
@@ -101,10 +117,17 @@ internal static class PlayerStateSync
         RemoteAvatar? avatar = CoopPlugin.Network?.GetAvatar(id);
         if (avatar == null)
         {
-            // The puppet is not spawned yet; the sender keeps resending while
-            // dead, so the state is not lost.
+            // The puppet is not spawned yet; remember it and try again in Tick.
+            Pending[id] = new PendingDeath
+            {
+                Dead = dead,
+                Position = position,
+                Rotation = rotation,
+            };
             return;
         }
+
+        Pending.Remove(id);
 
         if (avatar.IsDead == dead)
         {
@@ -113,5 +136,34 @@ internal static class PlayerStateSync
 
         _deathsApplied++;
         avatar.SetDead(dead, position, rotation);
+    }
+
+    /// <summary>Flushes deaths that arrived before their puppet existed.</summary>
+    public static void FlushPending()
+    {
+        if (Pending.Count == 0)
+        {
+            return;
+        }
+
+        foreach (KeyValuePair<int, PendingDeath> pair in Pending)
+        {
+            RemoteAvatar? avatar = CoopPlugin.Network?.GetAvatar(pair.Key);
+            if (avatar == null || avatar.IsDead == pair.Value.Dead)
+            {
+                continue;
+            }
+
+            _deathsApplied++;
+            avatar.SetDead(pair.Value.Dead, pair.Value.Position, pair.Value.Rotation);
+        }
+
+        foreach (int id in new List<int>(Pending.Keys))
+        {
+            if (CoopPlugin.Network?.GetAvatar(id) != null)
+            {
+                Pending.Remove(id);
+            }
+        }
     }
 }

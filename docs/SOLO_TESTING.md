@@ -202,11 +202,17 @@ BepInEx/LogOutput.1.log
 [story] cutscene '...' broadcast to the other player.
 [story] dialogue effect '....SetQuestLog(3)' shared with the other player.
 [items] spawned dropped item 'Makarov' for key '...' from template 'Makarov(Clone)'.
+[items] break event key='tutorial|/Vodka (1)[0]' item='Vodka' (bottle).
+[items] applied remote break key='tutorial|/Vodka (1)[0]'.
+[sync] animator parameters for 'Body Guard': Vertical(Float), Horizontal(Float), Speed(Float), Attack(Trigger), ...
 [death] local player died at (x, y, z).
 [death] ragdoll rig for remote 1: bodies=14, colliders=14, joints=13, colliderLayers=[9(Player)], playerLayer=2(Ignore Raycast), hitboxLayers=starting=256,default=512,gore=1024.
 [death] ragdoll layer for remote 1: 0(Default) (probe=0(Default)).
 [death] remote 1 is down (ragdoll bodies=14, colliders=14, joints=13).
 [death] remote 1 is back up.
+[death] save point (level start) recorded at (x, y, z).
+[death] respawned at the save point (x, y, z) (world kept, no reload).
+[save] Client blocked an in-level load: rolling back alone would desync the shared world. Only the host can rewind a save.
 [net] ... poses: 1@(x,y,z)
 ```
 
@@ -243,11 +249,22 @@ Enabled = true
 возвращают `false`. Загрузка при этом работает. В логе будут строки
 `[save] Client blocked ...`.
 
+Клиент также не может загрузить сохранение посреди уровня (откатиться к другому
+сейву): `SaveHandler.LoadProcedure` возвращает `false`, пока это не стартовая
+загрузка, переход между сценами или смерть. Иначе у клиента откатилась бы
+только его копия общего мира. Отключается ключом `Client.BlockRollback`.
+
+Смерть больше не перезагружает уровень: `SaveHandler.LoadProcedureFromDeath`
+перехватывается и игрок встаёт на точке последнего сохранения, а мир остаётся
+как был (`Player.RespawnOnDeath`). Точка сохранения пишется при сохранении,
+автосейве и на входе в уровень — в логе `[death] save point (...)`.
+
 Если нужно разрешить клиенту сохраняться (например, для отладки), задай:
 
 ```ini
 [Client]
 BlockSaves = false
+BlockRollback = false
 ```
 
 Не делай так при обычной игре вдвоём: у клиента и хоста общий каталог

@@ -90,6 +90,7 @@ internal static class ItemSync
     {
         Pickup = 0,
         Drop = 1,
+        Break = 2,
     }
 
     private static readonly List<ItemInfo> KnownItems = new();
@@ -111,6 +112,7 @@ internal static class ItemSync
     private static int _appliedChanges;
     private static int _eventsSent;
     private static int _eventsApplied;
+    private static bool _applyingRemoteBreak;
 
     public static void Register(ItemInfo? item)
     {
@@ -587,6 +589,137 @@ internal static class ItemSync
         );
     }
 
+    /// <summary>
+    /// Announces that the local player broke a bottle (or another breakable
+    /// prop) so the matching object breaks on the other machine too. Without
+    /// this the thrower saw the bottle shatter while the teammate kept an intact
+    /// bottle standing on the ground.
+    ///
+    /// Called from a prefix, before the break actually runs, so the hierarchy key
+    /// can still be resolved even if the game destroys the object as part of the
+    /// break.
+    /// </summary>
+    public static void OnLocalBreak(Component? source, string kind)
+    {
+        if (_applyingRemoteBreak ||
+            CoopPlugin.Settings.Role == CoopRole.Offline ||
+            source == null)
+        {
+            return;
+        }
+
+        ItemInfo? item = FindItem(source);
+        if (item == null || item.gameObject == null || IsNpcItem(item))
+        {
+            return;
+        }
+
+        string key = GetKey(item);
+        if (!key.StartsWith(_scene + "|", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _eventsSent++;
+        CoopPlugin.Network?.SendItemEvent(
+            key,
+            (byte)ItemEventKind.Break,
+            item.transform.position,
+            item.transform.rotation,
+            item.ItemName ?? string.Empty,
+            TemplateNameOf(item)
+        );
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[items] break event key='{key}' item='{item.ItemName}' ({kind})."
+        );
+    }
+
+    /// <summary>
+    /// Breaks every local copy of a remote item that just broke on the other
+    /// machine. Reuses the game's own break methods so the visual, the sound and
+    /// any shards match what the thrower saw.
+    /// </summary>
+    private static void ApplyBreak(string key)
+    {
+        List<ItemInfo>? instances = FindInstances(key);
+        if (instances == null)
+        {
+            Refresh();
+            instances = FindInstances(key);
+        }
+
+        if (instances == null)
+        {
+            return;
+        }
+
+        int broken = 0;
+        _applyingRemoteBreak = true;
+        try
+        {
+            foreach (ItemInfo instance in instances)
+            {
+                if (instance == null || instance.gameObject == null || IsHeldOrNpcItem(instance))
+                {
+                    continue;
+                }
+
+                if (BreakInstance(instance))
+                {
+                    broken++;
+                }
+            }
+        }
+        finally
+        {
+            _applyingRemoteBreak = false;
+        }
+
+        if (broken > 0)
+        {
+            CoopPlugin.LogSource.LogInfo($"[items] applied remote break key='{key}'.");
+        }
+    }
+
+    private static bool BreakInstance(ItemInfo item)
+    {
+        try
+        {
+            BottleBreak? bottle = item.GetComponentInChildren<BottleBreak>(true);
+            if (bottle == null)
+            {
+                bottle = item.GetComponentInParent<BottleBreak>();
+            }
+
+            if (bottle != null)
+            {
+                bottle.breakBottle();
+                return true;
+            }
+
+            genericbreakable? breakable = item.GetComponentInChildren<genericbreakable>(true);
+            if (breakable == null)
+            {
+                breakable = item.GetComponentInParent<genericbreakable>();
+            }
+
+            if (breakable != null)
+            {
+                breakable.breakApart();
+                return true;
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[items] remote break failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+
+        return false;
+    }
+
     /// <summary>Applies a pickup/drop event received from another player.</summary>
     public static void ApplyEvent(
         string key,
@@ -618,6 +751,12 @@ internal static class ItemSync
         if (kind == (byte)ItemEventKind.Pickup)
         {
             Apply(key, true, false, Vector3.zero, Quaternion.identity, false);
+            return;
+        }
+
+        if (kind == (byte)ItemEventKind.Break)
+        {
+            ApplyBreak(key);
             return;
         }
 
@@ -1442,5 +1581,23 @@ internal static class ItemRegisterDroppedDetailedPatch
         ItemSync.Register(__instance);
         ItemSync.LogDropped(__instance);
         ItemSync.OnLocalDrop(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(BottleBreak), "breakBottle")]
+internal static class ItemBottleBreakPatch
+{
+    private static void Prefix(BottleBreak __instance)
+    {
+        ItemSync.OnLocalBreak(__instance, "bottle");
+    }
+}
+
+[HarmonyPatch(typeof(genericbreakable), "breakApart")]
+internal static class ItemGenericBreakPatch
+{
+    private static void Prefix(genericbreakable __instance)
+    {
+        ItemSync.OnLocalBreak(__instance, "breakable");
     }
 }

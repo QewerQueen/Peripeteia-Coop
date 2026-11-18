@@ -80,6 +80,10 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool PlayerDeathRagdoll { get; private set; } = true;
 
+    internal static bool PlayerRespawnOnDeath { get; private set; } = true;
+
+    internal static bool BlockClientRollback { get; private set; } = true;
+
     internal static CoopSettings Settings { get; private set; } = null!;
 
     internal static CoopNetwork? Network { get; private set; }
@@ -88,6 +92,9 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool ShouldBlockClientSaves =>
         BlockClientSaves && Settings.Role == CoopRole.Client;
+
+    internal static bool ShouldBlockClientRollback =>
+        BlockClientRollback && Settings.Role == CoopRole.Client;
 
     public override void Load()
     {
@@ -273,7 +280,7 @@ public sealed class CoopPlugin : BasePlugin
             "Story",
             "SyncDialogueActions",
             true,
-            "Share the quest-log effects of a dialogue branch (NPCConversation.SetQuestLog / RemoveQuestLog). Item and reward actions are never replayed."
+            "Share the quest-log effects of a dialogue branch (NPCConversation.SetQuestLog / RemoveQuestLog) and, when ShareItemRewards is on, the equipment a branch gifts the player. Other item and reward actions are never replayed."
         ).Value;
 
         StorySyncQuestEffects = Config.Bind(
@@ -287,7 +294,7 @@ public sealed class CoopPlugin : BasePlugin
             "Story",
             "ShareItemRewards",
             true,
-            "Also replay the item listeners a quest object drives (ItemInfo.pickupitem, GiftGiver.GiveAllGifts) on the other machine, so both players get the starting weapons and equipment. Turn off if a unique quest item must stay single."
+            "Also replay the listeners that hand the player their equipment (GiftGiver.GiveAllGifts / GiveGiftAtIndex) so both players get the same starting weapons and kit. World pickups (ItemInfo.pickupitem) are never replayed - those objects are already shared - so the teammate cannot end up with two of the same weapon. Turn off if a unique quest item must stay single."
         ).Value;
 
         PlayerSyncDeath = Config.Bind(
@@ -302,6 +309,20 @@ public sealed class CoopPlugin : BasePlugin
             "DeathRagdoll",
             true,
             "Use the game's own ragdoll rig for the remote death (falls and stays down). If off, the body simply stops animating."
+        ).Value;
+
+        PlayerRespawnOnDeath = Config.Bind(
+            "Player",
+            "RespawnOnDeath",
+            true,
+            "On death, stand the player back up at the last save point instead of reloading the level. Keeps the shared world (doors, NPCs, quest state) exactly as it was for both players. Turn off to use the game's normal death-load."
+        ).Value;
+
+        BlockClientRollback = Config.Bind(
+            "Client",
+            "BlockRollback",
+            true,
+            "Stop a co-op client from loading a save mid-level on its own; that would rewind the client's copy of the shared world and desync it from the host. The initial load, scene transitions and the death respawn are still allowed."
         ).Value;
 
         Settings = CoopSettings.Parse(Environment.GetCommandLineArgs());
@@ -408,6 +429,8 @@ public sealed class CoopPlugin : BasePlugin
             TryPatch(typeof(ItemRegisterDroppedPatch));
             TryPatch(typeof(ItemRegisterDroppedDetailedPatch));
             TryPatch(typeof(ItemPickupEventPatch));
+            TryPatch(typeof(ItemBottleBreakPatch));
+            TryPatch(typeof(ItemGenericBreakPatch));
             TryPatch(typeof(WeaponFireSimplePatch));
             TryPatch(typeof(WeaponFireAtPointPatch));
             TryPatch(typeof(WeaponFireAtPointTriggerPatch));
@@ -427,6 +450,11 @@ public sealed class CoopPlugin : BasePlugin
             TryPatch(typeof(DisableTimeControllerPausePatch));
             TryPatch(typeof(DisableFocusPausePatch));
             TryPatch(typeof(MainMenuOpenProbePatch));
+            TryPatch(typeof(DeathRespawnPatch));
+            TryPatch(typeof(DeathSavePointSavePatch));
+            TryPatch(typeof(DeathSavePointQueuedPatch));
+            TryPatch(typeof(DeathSavePointAutosavePatch));
+            TryPatch(typeof(ClientBlockRollbackPatch));
         }
 
         LogSource.LogInfo(
@@ -438,6 +466,7 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static void Tick(PlayerMovement? localPlayer)
     {
+        DeathRespawn.Tick(localPlayer);
         Network?.Tick(localPlayer);
     }
 

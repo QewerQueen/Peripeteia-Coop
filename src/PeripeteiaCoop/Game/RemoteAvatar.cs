@@ -113,6 +113,13 @@ internal sealed class RemoteAvatar
     private bool _dead;
     private bool _ragdollActive;
 
+    // A death can arrive before the puppet exists (the avatar is created a beat
+    // after the first packets). Keep the pose so the ragdoll can still be built
+    // once the visual shows up.
+    private bool _pendingDeathPose;
+    private Vector3 _pendingDeathPosition;
+    private Quaternion _pendingDeathRotation;
+
     private enum BoneRole
     {
         Hips,
@@ -1832,23 +1839,30 @@ internal sealed class RemoteAvatar
     /// </summary>
     public void SetDead(bool dead, Vector3 position, Quaternion rotation)
     {
-        if (Root == null)
-        {
-            _dead = dead;
-            return;
-        }
-
-        if (_dead == dead)
+        if (_dead == dead && !(dead && _pendingDeathPose))
         {
             return;
         }
 
-        _dead = dead;
         if (dead)
         {
-            EnterRagdoll(position, rotation);
+            _dead = true;
+            _pendingDeathPose = true;
+            _pendingDeathPosition = position;
+            _pendingDeathRotation = rotation;
+
+            if (Root != null)
+            {
+                _pendingDeathPose = false;
+                EnterRagdoll(position, rotation);
+            }
+
+            return;
         }
-        else
+
+        _dead = false;
+        _pendingDeathPose = false;
+        if (Root != null)
         {
             ExitRagdoll();
         }
@@ -2058,6 +2072,12 @@ internal sealed class RemoteAvatar
             _gameAnimator.enabled = true;
         }
 
+        // Snap to the sender's current transform: the ragdoll moved the body
+        // away from it, and the puppet must reappear where the revived player
+        // actually is instead of walking back from the death spot.
+        _position = TargetPosition;
+        _yaw = TargetYaw;
+        Root.transform.position = _position;
         Root.transform.rotation = Quaternion.Euler(0.0f, _yaw, 0.0f);
         CoopPlugin.LogSource.LogInfo($"[death] remote {Id} is back up.");
     }
@@ -2297,6 +2317,21 @@ internal sealed class RemoteAvatar
             return;
         }
 
+        // A dead body belongs to the ragdoll. Writing the smoothed pose here
+        // every frame overwrote the ragdoll's rotation with a yaw-only one and
+        // dragged the corpse along with the sender's transform, which is what
+        // made a teammate's body "crawl away".
+        if (_dead)
+        {
+            if (_pendingDeathPose)
+            {
+                _pendingDeathPose = false;
+                EnterRagdoll(_pendingDeathPosition, _pendingDeathRotation);
+            }
+
+            return;
+        }
+
         float t = 1.0f - Mathf.Exp(-12.0f * deltaTime);
         _position = Vector3.Lerp(_position, TargetPosition, t);
         _yaw = Mathf.LerpAngle(_yaw, TargetYaw, t);
@@ -2306,7 +2341,7 @@ internal sealed class RemoteAvatar
 
         // Some pause implementations disable animators or restore their update
         // mode. Keep the remote puppet independent from the local pause menu.
-        if (!_dead && _gameAnimator != null && Time.timeScale <= 0.001f)
+        if (_gameAnimator != null && Time.timeScale <= 0.001f)
         {
             if (!_gameAnimator.enabled)
             {
