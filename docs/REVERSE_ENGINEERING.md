@@ -224,6 +224,35 @@ Player
   `private`, но Il2CppInterop генерирует для полей публичные свойства
   (`lightcontrol`, `get_lightcontrol`), поэтому доступно из плагина.
 
+### Фикс (0.7.12): инъекция аватара в восприятие через `Senses.seeTarget`
+
+- Регистрация цели через `addCustomTarget` добавляет запись в
+  `AIController.factionMemberList` (0x2E8), но собственный обход угроз
+  (`updateAIStatus`) до неё не доходит: `calculateThreat` для аватара
+  **не вызывается** (постфикс-лог перечисляет только реальных NPC и `Player`),
+  поэтому подмена `LightController` (фикс 0.7.11) вообще не срабатывает.
+- `Senses` (`MonoBehaviour`, поле `EnemyController.AIsenses` 0x128) держит
+  `tempVisibleTargets` (0x20) и `visibleTargets` (0x18); `seeTarget(float, Transform)`
+  (0x398E10, `public`) пишет в `tempVisibleTargets`, а `finalizeTargets` (0x398CC0)
+  меняет буферы местами. `clearTargets` (0x398A80) вызывается из `updateAIStatus`
+  (call site 0x327C62) **до** проверок конусов, а `seeTarget` — из `checkCone`
+  (0x2FA7F3).
+- **Фикс**: Harmony-постфикс на `Senses.clearTargets` (хост, только при
+  `Ai.TargetRemotePlayer`) вызывает `senses.seeTarget(threat, proxy)` для аватара,
+  если враг реально его видит: дистанция `<= EnemyController.sightRange` (0x88),
+  угол `dot(гориз. направление, forward) >= EnemyController.angleCosine` (0x90,
+  это `cos(sightAngle/2)`; `sightAngle` 0x8C — `[Range(50,120)]`, полный угол),
+  и линия видимости. Дальше игра сама наполняет `Targets` (0x2A8) и
+  `currentTarget` (0x70), и враг идёт в `attacking`.
+- Проверено в логе: `targets=[PeripeteiaCoop_Remote_1:100,0]`, `seesPlayer=True`,
+  `status=attacking`, `npc hit avatar 1 for 75`.
+- **Урон клиента по NPC (0.7.12)**: клиент перехватывает
+  `HealthScript.TakeDMG(bool,int,Transform,bool,Vector3,bool)` (единственный общий
+  фаннел — две другие перегрузки `0x42AD50` и `0x42AE00` вызывают его) и при
+  `enemyC != null` шлёт `PacketType.NpcDamage` хосту; хост находит врага по
+  `EnemySync.KeyOf` и применяет `TakeDMG` к настоящему `HealthScript`, затем
+  провоцирует (`becomeHostileToPlayer`/`heardSound`/`raiseSuspicion`).
+
 ## Следующие шаги реверса
 
 - Разобрать `CameraPivot`, `Shoot`, `HealthScript`, `AugSelect`, `SaveSystem`

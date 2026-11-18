@@ -18,9 +18,9 @@ An experimental co-op / multiplayer mod for **Peripeteia** (Unity 2021.3.11f1, I
 > Player death is shared too: a dead teammate goes down as a ragdoll and stands
 > back up on revive, and the body cannot be searched. The client reconnects
 > automatically after a host restart.
-> Inventory contents, ammo and scene transitions are still per-player; NPC AI only
-> chases the host, and cutscenes are not shared yet. Do not expect a complete co-op
-> playthrough at this stage.
+> Inventory contents and ammo stay per-player (they are shared only when an item
+> is deliberately dropped for the other player). Scene transitions, cutscenes and
+> NPC AI are shared. Do not expect a complete co-op playthrough at this stage.
 
 ## Why this is a big project
 
@@ -210,8 +210,12 @@ cd C:\Path\To\PeripeteiaCoop
   передаёт **параметры Animator** (float/int/bool), и клиент проигрывает те же
   клипы своей собственной машиной состояний, поэтому NPC ходят, стреляют и
   умирают с анимацией. Animator зеркальных NPC принудительно переводится в
-  `AlwaysAnimate`, чтобы они не замирали вне экрана. Убийство NPC одним игроком
-  засчитывается обоим. Настраивается секцией `Ai.*` в конфиге BepInEx.
+  `AlwaysAnimate`, чтобы они не замирали вне экрана. Враги **замечают и атакуют
+  клиента** так же, как хоста: хост подмешивает аватара клиента в восприятие
+  врага (`Senses.seeTarget`) с учётом дистанции, угла обзора и линии видимости, а
+  урон клиента по NPC пробрасывается на хост и применяется к настоящему врагу.
+  Убийство NPC одним игроком засчитывается обоим. Настраивается секцией `Ai.*`
+  в конфиге BepInEx.
 - **Сюжет идёт по одной общей ветке**: диалог, квестовый объект или скриптовый
   телепорт «забирает» тот игрок, кто дошёл до него первым; второй в это уже не
   может вмешаться, поэтому квестовые предметы и награды не выдаются дважды.
@@ -386,15 +390,21 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   disabled one; without it the registration succeeded but enemies ignored the
   client. The puppet also gets an inert collider on the layer the AI looks for
   the player on (`Ai.PerceptionCollider`), without which the perception rays
-  passed straight through it. The game's visibility check for any player-faction
-  target samples the **local** player's body (`AIController.lightcontrol`), so a
-  Harmony prefix on `AIController.calculateThreat` temporarily points those body
-  samples at the puppet's collider while the client is being evaluated; without
-  it the enemy looked at the host's own body and never reacted to the client.
-  Enemy weapons use the same `Shoot` component as the
+  passed straight through it. Registration alone is still not enough: the game's
+  own threat walk never reaches a custom faction entry, and its visibility check
+  for any player-faction target samples the **local** player's body
+  (`AIController.lightcontrol`). A host-side Harmony hook on
+  `Senses.clearTargets` therefore feeds the puppet through the game's own
+  `Senses.seeTarget` whenever the enemy really has line of sight and the puppet
+  is inside its sight cone and range — the same path every real target takes — so
+  the enemy's suspicion, `Targets` list and `currentTarget` then follow with no
+  further intervention. Enemy weapons use the same `Shoot` component as the
   player's, so an NPC shot that reaches the client is caught by the same hit path
   as player-versus-player fire and applied on the client's machine through its
-  real `HealthScript` (`Ai.DamageRemotePlayer`).
+  real `HealthScript` (`Ai.DamageRemotePlayer`). Damage in the other direction is
+  forwarded too: when the client hits an NPC its `HealthScript.TakeDMG` is
+  intercepted and replayed on the host against the real enemy, which also
+  provokes it (`Ai.NpcDamageFromClient`).
 - The story follows one shared branch (`Story.*` config): a one-time dialogue,
   quest object or scripted teleport is consumed by the first player to reach it,
   and the world GameObjects it switches are replayed on the other machine. A
@@ -409,7 +419,9 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   (doors, pistons, elevators, GameObject toggles) are replayed on the other
   machine (`Story.SyncQuestEffects`), and video cutscenes are replayed on both
   machines (`Story.SyncCutscenes`). The raw VIDE node progression itself is not
-  mirrored, and scene transitions are still local to each instance.
+  mirrored. Scene transitions are shared (`World.SyncSceneTransitions`): whoever
+  triggers a level change broadcasts the target scene and the other machine
+  follows it, so both players enter the same next level.
 - Player death is shared (`Player.SyncDeath`): the remote body goes down where it
   fell and stands back up on revive. The game's own baked ragdoll rig is used
   (`Player.DeathRagdoll`); the ragdoll colliders are moved onto the layer of the

@@ -62,6 +62,8 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool AiDamageRemotePlayer { get; private set; } = true;
 
+    internal static bool AiNpcDamageFromClient { get; private set; } = true;
+
     internal static bool StoryEnabled { get; private set; } = true;
 
     internal static bool StoryLockDialogues { get; private set; } = true;
@@ -256,6 +258,13 @@ public sealed class CoopPlugin : BasePlugin
             "DamageRemotePlayer",
             true,
             "Host only: NPC shots that hit the client deal damage on the client's machine (through its real HealthScript). NPC weapons use the same Shoot component as the player's, so this reuses the player-versus-player hit path. Requires TargetRemotePlayer."
+        ).Value;
+
+        AiNpcDamageFromClient = Config.Bind(
+            "Ai",
+            "NpcDamageFromClient",
+            true,
+            "Client only: forward damage the client deals to an NPC to the host, which applies it to the real enemy and turns it against the client. Without this the client's hits on enemies are discarded and the NPC never reacts."
         ).Value;
 
         StoryEnabled = Config.Bind(
@@ -485,6 +494,8 @@ public sealed class CoopPlugin : BasePlugin
             TryPatch(typeof(EnemyControllerUpdatePatch));
             TryPatch(typeof(EnemyMoverLateUpdatePatch));
             TryPatch(typeof(AiCalculateThreatPatch));
+            TryPatch(typeof(SensesClearTargetsPatch));
+            TryPatch(typeof(NpcDamageTakePatch));
             TryPatch(typeof(StoryConversationStartPatch));
             TryPatch(typeof(StoryQuestActionPatch));
             TryPatch(typeof(StoryTeleportWalkInPatch));

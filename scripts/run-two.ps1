@@ -24,6 +24,7 @@ param(
     [switch]$NoClient,
     [switch]$NoCoop,
     [switch]$AutoPilot,
+    [switch]$AutoPilotHunt,
     [switch]$DoorTest,
     [switch]$ProceduralAnimation
 )
@@ -72,6 +73,10 @@ $hostCoop = if ($NoCoop) { "" } else { " -coop-host -coop-port $Port -coop-name 
 $clientCoop = if ($NoCoop) { "" } else { " -coop-connect 127.0.0.1 -coop-port $Port -coop-name Client" }
 if ($AutoPilot -and -not $NoCoop) {
     $clientCoop += " -coop-autopilot"
+}
+if ($AutoPilotHunt -and -not $NoCoop) {
+    $clientCoop += " -coop-autopilot-hunt -coop-autopilot-shoot"
+    $hostCoop += " -coop-autopilot-hunt"
 }
 if ($LoadSave -and -not $NoCoop) {
     $loadArg = " -coop-load `"$LoadSave`""

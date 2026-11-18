@@ -31,6 +31,9 @@ internal static class AiTargeting
     private static float _nextScan;
     private static bool _loggedFactions;
     private static bool _dumped;
+    private static float _nextEnemyDump;
+    private static int _enemyDumps;
+    private static bool _enemyDumpFailed;
 
     public static int RegisteredCount => Done.Count;
 
@@ -61,6 +64,8 @@ internal static class AiTargeting
             AiPerception.Clear();
             _loggedFactions = false;
             _dumped = false;
+            _enemyDumps = 0;
+            _enemyDumpFailed = false;
         }
 
         if (Time.unscaledTime < _nextScan)
@@ -172,6 +177,240 @@ internal static class AiTargeting
         {
             _dumped = true;
             DumpDiagnostics(controllers[0], localPlayer);
+        }
+
+        try
+        {
+            DumpEnemies(localPlayer, network);
+        }
+        catch (Exception exception)
+        {
+            if (!_enemyDumpFailed)
+            {
+                _enemyDumpFailed = true;
+                CoopPlugin.LogSource.LogWarning(
+                    $"[aidbg] enemy dump failed: {exception.GetType().Name}: {exception.Message}"
+                );
+            }
+        }
+    }
+
+    /// <summary>
+    /// Solo-test diagnostic: every two seconds, logs what the enemies near the host
+    /// player OR near a remote puppet are actually thinking - their status, current
+    /// target, suspicion and the target dictionaries the game's own perception fills
+    /// in. This is how a retest proves whether an enemy ever registers the remote
+    /// avatar, without guessing from the outside.
+    /// </summary>
+    private static void DumpEnemies(PlayerMovement? localPlayer, CoopNetwork? network)
+    {
+        if (localPlayer == null ||
+            (!CoopPlugin.ProbeEnabled && !CoopPlugin.Settings.AutoPilotHunt) ||
+            Time.unscaledTime < _nextEnemyDump)
+        {
+            return;
+        }
+
+        _nextEnemyDump = Time.unscaledTime + 2.0f;
+        if (_enemyDumps >= 200)
+        {
+            return;
+        }
+
+        _enemyDumps++;
+
+        EnemyController[] enemies;
+        try
+        {
+            enemies = UnityEngine.Object.FindObjectsOfType<EnemyController>();
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        Vector3 playerPos = localPlayer.transform.position;
+
+        // Where the remote puppets stand, so the dump can follow the action to the
+        // client instead of only the host's own body.
+        var avatars = new List<KeyValuePair<int, Vector3>>();
+        if (network != null)
+        {
+            try
+            {
+                foreach (int id in network.RemotePlayerIds())
+                {
+                    Transform? root = network.GetAvatarRoot(id);
+                    if (root != null)
+                    {
+                        avatars.Add(new KeyValuePair<int, Vector3>(id, root.position));
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Ignored.
+            }
+        }
+
+        int total = 0;
+        int hostiles = 0;
+        string nearestAvatar = "none";
+        float nearestAvatarDistance = float.MaxValue;
+        var rows = new List<KeyValuePair<float, string>>();
+
+        if (enemies != null)
+        {
+            foreach (EnemyController enemy in enemies)
+            {
+                if (enemy == null)
+                {
+                    continue;
+                }
+
+                total++;
+                Vector3 position = enemy.transform.position;
+                float dPlayer = Vector3.Distance(playerPos, position);
+
+                float dAvatar = float.MaxValue;
+                int dAvatarId = 0;
+                foreach (KeyValuePair<int, Vector3> avatar in avatars)
+                {
+                    float candidate = Vector3.Distance(avatar.Value, position);
+                    if (candidate < dAvatar)
+                    {
+                        dAvatar = candidate;
+                        dAvatarId = avatar.Key;
+                    }
+                }
+
+                if (dAvatar < nearestAvatarDistance)
+                {
+                    nearestAvatarDistance = dAvatar;
+                    nearestAvatar = $"{dAvatarId}@{dAvatar:F1}m";
+                }
+
+                bool friendly = true;
+                bool hatesPlayer = false;
+                bool hatesThieves = false;
+                int factionNo = 0;
+                string faction = "?";
+                string character = "?";
+                string status = "?";
+                bool active = false;
+                try
+                {
+                    friendly = enemy.friendly;
+                    hatesPlayer = enemy.squadHatesPlayer;
+                    hatesThieves = enemy.hatesThieves;
+                    factionNo = enemy.FactionNo;
+                    faction = enemy.Faction ?? "?";
+                    character = enemy.CharacterName ?? "";
+                    status = enemy.status.ToString();
+                    active = enemy.currentTarget != null || enemy.suspicionLevel > 1.0f;
+                }
+                catch (Exception)
+                {
+                    // Ignored: a partially initialised enemy just logs placeholders.
+                }
+
+                if (!friendly)
+                {
+                    hostiles++;
+                }
+
+                float nearest = Mathf.Min(dPlayer, dAvatar);
+                if (nearest > 150.0f && !active)
+                {
+                    continue;
+                }
+
+                bool seesPlayer = false;
+                Il2CppSystem.Collections.Generic.Dictionary<Transform, float>? senses = null;
+                try
+                {
+                    Senses? aiSenses = enemy.AIsenses;
+                    if (aiSenses != null)
+                    {
+                        seesPlayer = aiSenses.seesPlayer;
+                        senses = aiSenses.visibleTargets;
+                    }
+                }
+                catch (Exception)
+                {
+                    // Ignored: a missing senses component just means "no data".
+                }
+
+                string line =
+                    $"[aidbg] enemy '{character}' hostile={!friendly} faction={factionNo}/'{faction}' " +
+                    $"hatesPlayer={hatesPlayer} hatesThieves={hatesThieves} status={status} " +
+                    $"cur='{Name(enemy.currentTarget)}' susp={enemy.suspicionLevel:F2} rising={enemy.suspicionRising} " +
+                    $"bodyVisible={enemy.bodyVisible} seesPlayer={seesPlayer} dPlayer={dPlayer:F1} " +
+                    $"dAvatar={dAvatar:F1}(id={dAvatarId}) dTarget={enemy.distanceToTarget:F1} " +
+                    $"targets={DescribeTargets(enemy.Targets)} " +
+                    $"senses={DescribeTargets(senses)}";
+
+                rows.Add(new KeyValuePair<float, string>(nearest, line));
+            }
+        }
+
+        rows.Sort((a, b) => a.Key.CompareTo(b.Key));
+        int shown = 0;
+        foreach (KeyValuePair<float, string> row in rows)
+        {
+            if (shown++ >= 10)
+            {
+                break;
+            }
+
+            CoopPlugin.LogSource.LogInfo(row.Value);
+        }
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[aidbg] enemies total={total} hostiles={hostiles} shown={shown} at player={playerPos} nearestAvatar={nearestAvatar}."
+        );
+    }
+
+    private static string Name(Transform? transform)
+    {
+        try
+        {
+            return transform != null ? transform.name : "<null>";
+        }
+        catch (Exception)
+        {
+            return "<gone>";
+        }
+    }
+
+    private static string DescribeTargets(Il2CppSystem.Collections.Generic.Dictionary<Transform, float>? dict)
+    {
+        if (dict == null)
+        {
+            return "<null>";
+        }
+
+        try
+        {
+            int count = dict.Count;
+            if (count == 0)
+            {
+                return "[]";
+            }
+
+            var parts = new List<string>();
+            var enumerator = dict.GetEnumerator();
+            while (enumerator.MoveNext() && parts.Count < 6)
+            {
+                Il2CppSystem.Collections.Generic.KeyValuePair<Transform, float> pair = enumerator.Current;
+                parts.Add($"{Name(pair.Key)}:{pair.Value:F1}");
+            }
+
+            return "[" + string.Join(", ", parts) + $"] (n={count})";
+        }
+        catch (Exception)
+        {
+            return "<err>";
         }
     }
 

@@ -25,6 +25,22 @@ internal sealed class CoopSettings
 
     public bool AutoPilot { get; private set; }
 
+    /// <summary>
+    /// Debug-only solo test mode: instead of circling, the autopilot walks the
+    /// local player towards the nearest enemy so a host can observe whether its
+    /// AI reacts to the client. Never enabled unless -coop-autopilot-hunt is
+    /// passed.
+    /// </summary>
+    public bool AutoPilotHunt { get; private set; }
+
+    /// <summary>
+    /// Debug-only solo test mode: the client periodically deals damage to the
+    /// nearest NPC so the host can prove that client damage is forwarded and the
+    /// enemy turns against the client. Never enabled unless -coop-autopilot-shoot
+    /// is passed.
+    /// </summary>
+    public bool AutoPilotShoot { get; private set; }
+
     public bool DoorTest { get; private set; }
 
     public bool GameAnimator { get; private set; } = true;
@@ -77,6 +93,18 @@ internal sealed class CoopSettings
                 case "-coop-autopilot":
                 case "--coop-autopilot":
                     settings.AutoPilot = true;
+                    break;
+
+                case "-coop-autopilot-hunt":
+                case "--coop-autopilot-hunt":
+                    settings.AutoPilot = true;
+                    settings.AutoPilotHunt = true;
+                    break;
+
+                case "-coop-autopilot-shoot":
+                case "--coop-autopilot-shoot":
+                    settings.AutoPilot = true;
+                    settings.AutoPilotShoot = true;
                     break;
 
                 case "-coop-door-test":

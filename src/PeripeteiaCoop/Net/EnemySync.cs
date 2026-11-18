@@ -912,7 +912,13 @@ internal static class EnemySync
         return KnownEnemies.TryGetValue(key, out EnemyController? enemy) ? enemy : null;
     }
 
-    private static string KeyOf(EnemyController enemy)
+    /// <summary>Looks up a live enemy by its network key. Used by NPC damage forwarding.</summary>
+    internal static EnemyController? FindByKey(string key)
+    {
+        return string.IsNullOrEmpty(key) ? null : Find(key);
+    }
+
+    internal static string KeyOf(EnemyController enemy)
     {
         Transform transform = enemy.transform;
         var builder = new StringBuilder();

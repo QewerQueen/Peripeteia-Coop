@@ -38,6 +38,7 @@ internal sealed class CoopNetwork : IDisposable
         SaveLoad = 14,
         SceneChange = 15,
         CorpsePose = 16,
+        NpcDamage = 17,
     }
 
     [Flags]
@@ -53,7 +54,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 19;
+    private const int ProtocolVersion = 20;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
 
@@ -92,6 +93,8 @@ internal sealed class CoopNetwork : IDisposable
     private int _autopilotPlayerId;
     private float _autopilotGroundedSince;
     private float _nextAutopilotTime;
+    private float _nextHuntLog;
+    private float _nextShootTime;
     private PlayerMovement? _localPlayer;
     private ObjectHighlight? _localHighlight;
 
@@ -933,6 +936,32 @@ internal sealed class CoopNetwork : IDisposable
         writer.Put(point.z);
     }
 
+    /// <summary>
+    /// Client only: reports damage the local player dealt to an NPC. The host
+    /// owns every NPC, so without this the hit is thrown away as soon as the next
+    /// snapshot overwrites the mirrored health, and the enemy never turns on the
+    /// shooter. <paramref name="key"/> identifies the NPC on the host.
+    /// </summary>
+    public void SendNpcDamage(string key, int amount, bool headshot, Vector3 point)
+    {
+        if (_settings.Role != CoopRole.Client || _net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.NpcDamage);
+        writer.Put(key ?? string.Empty);
+        writer.Put(amount);
+        writer.Put(headshot);
+        writer.Put(point.x);
+        writer.Put(point.y);
+        writer.Put(point.z);
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
     private NetPeer? FindPeer(int id)
     {
         foreach (KeyValuePair<NetPeer, int> pair in _peerIds)
@@ -1365,6 +1394,12 @@ internal sealed class CoopNetwork : IDisposable
             _autopilotOriginSet = true;
         }
 
+        if (_settings.AutoPilotHunt)
+        {
+            ApplyAutoPilotHunt(localPlayer);
+            return;
+        }
+
         if (Time.unscaledTime < _nextAutopilotTime)
         {
             return;
@@ -1376,6 +1411,229 @@ internal sealed class CoopNetwork : IDisposable
         var target = _autopilotOrigin + new Vector3(Mathf.Cos(angle) * 2.0f, 0.0f, Mathf.Sin(angle) * 2.0f);
 
         localPlayer.TeleportPlayer(target, true);
+    }
+
+    /// <summary>
+    /// Debug-only solo test mode (-coop-autopilot-hunt). On the host it walks the
+    /// host player to the nearest hostile enemy; on the client it follows the host
+    /// avatar. Keeping both players together is the point: the host only simulates
+    /// AI near its own body, so an enemy the client walked to on its own stays
+    /// dormant until the host arrives too.
+    /// </summary>
+    private void ApplyAutoPilotHunt(PlayerMovement localPlayer)
+    {
+        if (Time.unscaledTime < _nextAutopilotTime)
+        {
+            return;
+        }
+
+        _nextAutopilotTime = Time.unscaledTime + 0.4f;
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            HuntHost(localPlayer);
+        }
+        else
+        {
+            FollowHost(localPlayer);
+
+            if (_settings.AutoPilotShoot)
+            {
+                TestClientNpcDamage(localPlayer);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Debug-only: makes the client deal damage to the nearest hostile NPC so the
+    /// host can prove that client damage is forwarded, applied to the real enemy
+    /// and answered. Damage goes through the game's own HealthScript.TakeDMG, which
+    /// is exactly the call the mod hooks, so it exercises the real path.
+    /// </summary>
+    private void TestClientNpcDamage(PlayerMovement localPlayer)
+    {
+        if (Time.unscaledTime < _nextShootTime)
+        {
+            return;
+        }
+
+        _nextShootTime = Time.unscaledTime + 2.5f;
+
+        Vector3 position = localPlayer.transform.position;
+        EnemyController? nearest = null;
+        float best = 45.0f;
+
+        foreach (EnemyController enemy in UnityEngine.Object.FindObjectsOfType<EnemyController>())
+        {
+            if (enemy == null || enemy.gameObject == null)
+            {
+                continue;
+            }
+
+            bool friendly;
+            try
+            {
+                friendly = enemy.friendly;
+            }
+            catch (Exception)
+            {
+                friendly = true;
+            }
+
+            if (friendly)
+            {
+                continue;
+            }
+
+            float distance = Vector3.Distance(position, enemy.transform.position);
+            if (distance < best)
+            {
+                best = distance;
+                nearest = enemy;
+            }
+        }
+
+        if (nearest == null)
+        {
+            LogHunt("client: shoot test found no hostile NPC within 45m");
+            return;
+        }
+
+        HealthScript? health;
+        try
+        {
+            health = nearest.health;
+        }
+        catch (Exception)
+        {
+            health = null;
+        }
+
+        if (health == null || health.dead)
+        {
+            LogHunt($"client: shoot test skipped, '{nearest.CharacterName}' has no live health");
+            return;
+        }
+
+        Vector3 point;
+        try
+        {
+            point = health.centerOfMass != null ? health.centerOfMass.position : nearest.transform.position;
+        }
+        catch (Exception)
+        {
+            point = nearest.transform.position;
+        }
+
+        LogHunt($"client: shooting '{nearest.CharacterName}' d={best:F1} hp={health.HP}");
+        try
+        {
+            health.TakeDMG(false, 5, localPlayer.transform, false, point, false);
+        }
+        catch (Exception exception)
+        {
+            LogHunt($"client: shoot test failed: {exception.GetType().Name}: {exception.Message}");
+        }
+    }
+
+    private void HuntHost(PlayerMovement localPlayer)
+    {
+        Vector3 position = localPlayer.transform.position;
+        EnemyController? nearest = null;
+        float best = float.MaxValue;
+        int hostiles = 0;
+
+        foreach (EnemyController enemy in UnityEngine.Object.FindObjectsOfType<EnemyController>())
+        {
+            if (enemy == null)
+            {
+                continue;
+            }
+
+            bool friendly;
+            try
+            {
+                friendly = enemy.friendly;
+            }
+            catch (Exception)
+            {
+                friendly = true;
+            }
+
+            if (friendly)
+            {
+                continue;
+            }
+
+            hostiles++;
+            float distance = Vector3.Distance(position, enemy.transform.position);
+            if (distance < best)
+            {
+                best = distance;
+                nearest = enemy;
+            }
+        }
+
+        if (nearest == null)
+        {
+            LogHunt($"host: no hostile enemy found (hostiles={hostiles}) self={position}");
+            return;
+        }
+
+        Vector3 target = nearest.transform.position;
+        if (best <= 12.0f)
+        {
+            LogHunt($"host: holding near '{nearest.CharacterName}' at {target} d={best:F1} self={position}");
+            return;
+        }
+
+        Vector3 away = position - target;
+        away.y = 0.0f;
+        if (away.sqrMagnitude < 0.01f)
+        {
+            away = Vector3.forward;
+        }
+
+        away.Normalize();
+        Vector3 destination = target + away * 6.0f;
+        destination.y = target.y + 0.2f;
+
+        LogHunt($"host: hunting '{nearest.CharacterName}' at {target} d={best:F1} self={position} -> {destination}");
+        localPlayer.TeleportPlayer(destination, true);
+    }
+
+    private void FollowHost(PlayerMovement localPlayer)
+    {
+        Transform? host = GetAvatarRoot(0);
+        if (host == null)
+        {
+            LogHunt("client: host avatar not available yet");
+            return;
+        }
+
+        Vector3 target = host.position;
+        Vector3 position = localPlayer.transform.position;
+        float distance = Vector3.Distance(position, target);
+        if (distance <= 3.0f)
+        {
+            LogHunt($"client: with host at {target} d={distance:F1} self={position}");
+            return;
+        }
+
+        Vector3 destination = target + new Vector3(2.0f, 0.0f, 2.0f);
+        LogHunt($"client: following host at {target} d={distance:F1} self={position} -> {destination}");
+        localPlayer.TeleportPlayer(destination, true);
+    }
+
+    private void LogHunt(string message)
+    {
+        if (Time.unscaledTime < _nextHuntLog)
+        {
+            return;
+        }
+
+        _nextHuntLog = Time.unscaledTime + 2.0f;
+        CoopPlugin.LogSource.LogInfo($"[hunt] {message}");
     }
 
     private void OnConnectionRequest(ConnectionRequest request)
@@ -1494,7 +1752,8 @@ internal sealed class CoopNetwork : IDisposable
             type != PacketType.EnemyState &&
             type != PacketType.EnemyDeath &&
             type != PacketType.PlayerDeath &&
-            type != PacketType.StoryEvent)
+            type != PacketType.StoryEvent &&
+            type != PacketType.NpcDamage)
         {
             CoopPlugin.LogSource.LogInfo($"[net] Received {type} from {peer.Address}:{peer.Port}.");
         }
@@ -1563,6 +1822,10 @@ internal sealed class CoopNetwork : IDisposable
 
             case PacketType.CorpsePose:
                 ReceiveCorpsePose(peer, reader);
+                break;
+
+            case PacketType.NpcDamage:
+                ReceiveNpcDamage(peer, reader);
                 break;
         }
     }
@@ -2202,6 +2465,22 @@ internal sealed class CoopNetwork : IDisposable
             WriteDamage(relay, targetId, dealerId, amount, headshot, point);
             target.Send(relay, DeliveryMethod.ReliableOrdered);
         }
+    }
+
+    private void ReceiveNpcDamage(NetPeer peer, NetDataReader reader)
+    {
+        if (_settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        string key = reader.GetString();
+        int amount = reader.GetInt();
+        bool headshot = reader.GetBool();
+        var point = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+
+        int fromId = _peerIds.TryGetValue(peer, out int id) ? id : -1;
+        NpcDamageSync.Apply(key, amount, headshot, point, fromId);
     }
 
     private void ReceiveWeaponEvent(NetPeer peer, NetDataReader reader)
