@@ -358,7 +358,14 @@ internal sealed class RemoteAvatar
         // teammate's puppet lose limbs, so keep the clone we already have (it was
         // built from a whole body) and just re-point it at the new one. A real
         // scene change, or a body whose set of parts actually changed, rebuilds.
-        if (!_usingFallback && !sceneChanged && sourceChanged && _source != null &&
+        //
+        // The previous body is already destroyed by the time we get here (the
+        // respawn replaces it), so _source is a dead Unity object and a plain
+        // "_source != null" test is always false, which used to skip this branch
+        // and rebuild the puppet from a half-initialised body. Compare against
+        // the recorded part list instead.
+        bool hadParts = _sourceRootChildren != null && _sourceRootChildren.Length > 0;
+        if (!_usingFallback && !sceneChanged && sourceChanged && hadParts &&
             !HasUnseenRootChildren(source))
         {
             _nextRefreshTime = Time.unscaledTime + 1.0f;
@@ -368,6 +375,15 @@ internal sealed class RemoteAvatar
                 $"[avatar] keeping avatar id={Id}: the local body was swapped in place."
             );
             return;
+        }
+
+        if (!_usingFallback && !sceneChanged && sourceChanged)
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[avatar] rebuilding avatar id={Id} on an in-place body swap " +
+                $"(recorded parts={(_sourceRootChildren == null ? -1 : _sourceRootChildren.Length)}, " +
+                $"new parts={source.childCount}, unseen={HasUnseenRootChildren(source)})."
+            );
         }
 
         _nextRefreshTime = Time.unscaledTime + 1.0f;

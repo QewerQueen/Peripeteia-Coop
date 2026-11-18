@@ -61,7 +61,11 @@ internal static class PlayerStateSync
 
         if (localPlayer == null || localPlayer.gameObject == null)
         {
-            _initialized = false;
+            // Do not drop the baseline here. A respawn destroys the local player
+            // and creates a fresh one a moment later; forgetting the last state
+            // would make that new body the "first sample", which swallows the
+            // dead -> alive transition and leaves the teammate's corpse on the
+            // ground forever.
             return;
         }
 
