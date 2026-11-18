@@ -41,6 +41,12 @@ internal static class CombatSync
     private static int _shotsHit;
     private static int _damageTaken;
 
+    /// <summary>How many forwarded NPC hits are written to the log before it goes quiet.</summary>
+    private const int NpcHitLogLimit = 10;
+
+    private static int _npcHitsLogged;
+    private static int _npcDamageLogged;
+
     /// <summary>Physics layer the remote proxies live on, or -1 before the first avatar.</summary>
     public static int ProxyLayer => _proxyLayer;
 
@@ -598,7 +604,17 @@ internal static class CombatSync
             SpawnHitMarker(point, headshot);
         }
 
-        if (CoopPlugin.ProbeEnabled)
+        if (!byLocalPlayer && _npcHitsLogged < NpcHitLogLimit)
+        {
+            // Proof that enemy fire is being forwarded; capped so sustained
+            // combat cannot flood the log.
+            _npcHitsLogged++;
+            CoopPlugin.LogSource.LogInfo(
+                $"[combat] npc hit avatar {best.AvatarId} for {damage} headshot={headshot} " +
+                $"distance={bestDistance:F2} point={point} ({_npcHitsLogged}/{NpcHitLogLimit})"
+            );
+        }
+        else if (CoopPlugin.ProbeEnabled)
         {
             CoopPlugin.LogSource.LogInfo(
                 $"[combat] {(byLocalPlayer ? "player" : "npc")} hit avatar {best.AvatarId} " +
@@ -666,7 +682,16 @@ internal static class CombatSync
             );
         }
 
-        if (CoopPlugin.ProbeEnabled)
+        if (!fromPlayer && _npcDamageLogged < NpcHitLogLimit)
+        {
+            // Client-side proof that an NPC hit was actually applied locally.
+            _npcDamageLogged++;
+            CoopPlugin.LogSource.LogInfo(
+                $"[combat] took {amount} NPC damage headshot={headshot} point={point} " +
+                $"hp={health.HP} ({_npcDamageLogged}/{NpcHitLogLimit})"
+            );
+        }
+        else if (CoopPlugin.ProbeEnabled)
         {
             string source = fromPlayer ? $"avatar {dealerId}" : "an NPC";
             CoopPlugin.LogSource.LogInfo(
