@@ -88,6 +88,29 @@ internal static class AiPerception
     }
 
     /// <summary>
+    /// Finds the body registered for a target transform. The registered centre of
+    /// mass is normally the perception proxy (a direct child of the avatar root),
+    /// so the lookup also walks a few parents to reach the registered root.
+    /// </summary>
+    private static bool TryGetBody(Transform target, out Body body)
+    {
+        body = null!;
+        Transform? current = target;
+        for (int depth = 0; current != null && depth < 4; depth++)
+        {
+            if (Bodies.TryGetValue(current.GetInstanceID(), out Body? found))
+            {
+                body = found;
+                return true;
+            }
+
+            current = current.parent;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Swaps the controller's LightController body samples for the avatar's own
     /// collider when the target is a registered remote avatar. Returns the state
     /// that must be handed back to <see cref="Restore"/>; <c>null</c> means nothing
@@ -100,7 +123,7 @@ internal static class AiPerception
             return null;
         }
 
-        if (!Bodies.TryGetValue(target.GetInstanceID(), out Body? body))
+        if (!TryGetBody(target, out Body? body))
         {
             return null;
         }
@@ -174,12 +197,19 @@ internal static class AiPerception
                 }
             }
 
-            // Fall back to any enabled collider under the root that is not on the
-            // default layer: the puppet's combat proxy sits on "Ignore Raycast",
-            // which the AI never tests, so it is not a candidate.
+            // Fall back to any enabled collider under the root that sits on a layer
+            // the AI actually tests. The puppet's combat proxy lives on "Ignore
+            // Raycast" (2) and the default layer (0) is never tested either, so
+            // neither is a candidate.
             foreach (Collider collider in root.GetComponentsInChildren<Collider>(true))
             {
-                if (collider != null && collider.enabled && collider.gameObject.layer != 0)
+                if (collider == null || !collider.enabled)
+                {
+                    continue;
+                }
+
+                int layer = collider.gameObject.layer;
+                if (layer != 0 && layer != 2)
                 {
                     return collider;
                 }

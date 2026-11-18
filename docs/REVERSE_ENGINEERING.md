@@ -215,6 +215,11 @@ Player
   одного вызова, но только когда `target` — зарегистрированный корень клона;
   постфикс возвращает исходные массивы. Вся остальная логика игры (threat,
   `aimedat`, `Senses`) отрабатывает как для настоящего игрока.
+- Дополнительно сам `PeripeteiaCoop_AiProxy` перенесён в центр тела
+  (`localPosition = controller.center`, `capsule.center = 0`) и регистрируется
+  как `centerOfMass` цели: тогда `member.pos` и `target.trans` — это центр тела, и
+  враг смотрит/целится в корпус, а не в ноги. Реестр тел в `AiPerception` ключуется
+  по корню клона, а `Swap` при необходимости поднимается на пару уровней вверх.
 - `HealthScript.centerOfMass` — `public`; `AIController.lightcontrol` —
   `private`, но Il2CppInterop генерирует для полей публичные свойства
   (`lightcontrol`, `get_lightcontrol`), поэтому доступно из плагина.

@@ -346,6 +346,11 @@ internal static class CombatSync
 
             var proxyObject = new GameObject("PeripeteiaCoop_AiProxy");
             proxyObject.transform.SetParent(root.transform, false);
+
+            // Put the proxy's own transform at the body centre rather than the
+            // feet: the AI registers this transform as the target's centre of
+            // mass, so its position is what enemies aim and look at.
+            proxyObject.transform.localPosition = center;
             proxyObject.layer = layer;
 
             Rigidbody body = proxyObject.AddComponent<Rigidbody>();
@@ -355,7 +360,7 @@ internal static class CombatSync
 
             var capsule = proxyObject.AddComponent<CapsuleCollider>();
             capsule.direction = 1;
-            capsule.center = center;
+            capsule.center = Vector3.zero;
             capsule.height = height;
             capsule.radius = radius;
             capsule.isTrigger = false;

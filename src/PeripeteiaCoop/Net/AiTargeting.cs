@@ -25,6 +25,7 @@ internal static class AiTargeting
     private static readonly HashSet<string> Failed = new();
 
     private const string HealthProxyName = "PeripeteiaCoop_AiHealth";
+    private const string PerceptionProxyName = "PeripeteiaCoop_AiProxy";
 
     private static string _scene = string.Empty;
     private static float _nextScan;
@@ -127,6 +128,11 @@ internal static class AiTargeting
                     continue;
                 }
 
+                // Register the perception proxy (at the body centre) as the centre of
+                // mass when it exists, so the AI aims and looks at the body instead of
+                // the feet. Falls back to the avatar root.
+                Transform aim = ResolveAimTransform(root);
+
                 try
                 {
                     // (add, centerOfMass, sightRange, faction, ec, HP, dmg, aiTarget, senses, hboxes)
@@ -135,7 +141,7 @@ internal static class AiTargeting
                     // EnsureHealthProxy), so the inert stand-in is supplied as HP.
                     controller.addCustomTarget(
                         true,
-                        root,
+                        aim,
                         -1.0f,
                         faction,
                         null!,
@@ -148,7 +154,7 @@ internal static class AiTargeting
                     Done.Add(key);
                     CoopPlugin.LogSource.LogInfo(
                         $"[ai] remote player {id} registered as a target on '{controller.name}' " +
-                        $"(faction={faction}, HP proxy on '{root.name}')."
+                        $"(faction={faction}, HP proxy on '{root.name}', aim on '{aim.name}')."
                     );
                 }
                 catch (Exception exception)
@@ -304,6 +310,23 @@ internal static class AiTargeting
             );
             return null;
         }
+    }
+
+    /// <summary>
+    /// The transform the AI should treat as the avatar's centre of mass: the
+    /// perception proxy, whose own transform sits at the body centre. Falls back
+    /// to the avatar root when the proxy is absent (for example when the extra
+    /// perception collider is disabled in the config).
+    /// </summary>
+    private static Transform ResolveAimTransform(Transform? root)
+    {
+        if (root == null)
+        {
+            return null!;
+        }
+
+        Transform? proxy = root.Find(PerceptionProxyName);
+        return proxy != null ? proxy : root;
     }
 
     /// <summary>
