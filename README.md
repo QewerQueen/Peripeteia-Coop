@@ -386,7 +386,12 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   disabled one; without it the registration succeeded but enemies ignored the
   client. The puppet also gets an inert collider on the layer the AI looks for
   the player on (`Ai.PerceptionCollider`), without which the perception rays
-  passed straight through it. Enemy weapons use the same `Shoot` component as the
+  passed straight through it. The game's visibility check for any player-faction
+  target samples the **local** player's body (`AIController.lightcontrol`), so a
+  Harmony prefix on `AIController.calculateThreat` temporarily points those body
+  samples at the puppet's collider while the client is being evaluated; without
+  it the enemy looked at the host's own body and never reacted to the client.
+  Enemy weapons use the same `Shoot` component as the
   player's, so an NPC shot that reaches the client is caught by the same hit path
   as player-versus-player fire and applied on the client's machine through its
   real `HealthScript` (`Ai.DamageRemotePlayer`).

@@ -181,6 +181,44 @@ Player
   `hboxes` — из `GetComponentInChildren<HitBoxes>()`, `head` — из
   `hboxes[0x58] ?? centerOfMass`.
 
+### Почему враги не видели клиента (faction 0 == LightController хоста)
+
+- В корутине `updateAIStatus` флаг `isplayer` вычисляется как `(f == 0)`, где `f`
+  — индекс **внешней** фракции, то есть в паре «наблюдатель → цель» он означает
+  «цель принадлежит фракции игрока» (0). Вторая проверка пары идёт как
+  `CheckVisionCones(m2, m1, isplayer = [rdi+0x38])`.
+- `calculateThreat(EnemyController enemy, Transform source, Transform target,
+  Vector3 lookDirection, float dot, float distance, float elevation, bool
+  isplayer)` (RVA 0x2F88D0). Ранние выходы: `const > distance` и `dot <= const`.
+  Далее — LOS-луч через `alphaRaycast` (0x423AF0); хит пишется в `visiHit`
+  (0x15C), `raycastColl` (0x318). Если коллайдер не `null`, `aimedat` (0x1B0) =
+  `collider.transform`; затем `healthScr` (0xB0) =
+  `effBatch.getHPScript(collider)` (0x3B43B0), и если он есть, `aimedat` =
+  `healthScr.transform`, `ec` (0x1B8) = `healthScr.enemyC`.
+- Гейт `Object.op_Equality(aimedat, target)` (0x1A8E790): **равно** →
+  `[enemy+0x365] = 0` (и, если `!isplayer`, `xmm9 = xmm10` — «видим цель»);
+  **не равно** → `[enemy+0x365] = isHostile(healthScr.enemyC.faction,
+  enemy.faction)` (флаг «попали в чужого, не в цель»).
+- **Ветка `isplayer == true`**: берётся `AIController.lightcontrol` (0xE8) —
+  это `LightController` **локального** игрока. Идёт цикл по
+  `lightcontrol.playerColliders` (0x80, `Collider[]`): из головы врага
+  райкастится в `lightcontrol.colliderPositions[i]` (0x88, `Vector3[]`), и если
+  луч попал **именно** в `playerColliders[i]`, накапливается `xmm9 += xmm10`;
+  в конце `xmm9 /= playerColliders.Length`. Затем гейт `xmm9 > 0`, и только тогда
+  вызывается `Senses.seeTarget(threat, target.trans)`.
+- Вывод: восприятие цели фракции 0 жёстко привязано к телу **локального** игрока
+  (`LightController` хоста). Второй член фракции 0 (наш клон клиента) не имеет
+  своих коллайдеров в этом списке, поэтому враг его не видит.
+- **Фикс (0.7.11)**: Harmony-префикс на `calculateThreat` подменяет
+  `lightcontrol.playerColliders`/`colliderPositions` на единственный коллайдер
+  клона (`PeripeteiaCoop_AiProxy`, слой `player`) и его `bounds.center` на время
+  одного вызова, но только когда `target` — зарегистрированный корень клона;
+  постфикс возвращает исходные массивы. Вся остальная логика игры (threat,
+  `aimedat`, `Senses`) отрабатывает как для настоящего игрока.
+- `HealthScript.centerOfMass` — `public`; `AIController.lightcontrol` —
+  `private`, но Il2CppInterop генерирует для полей публичные свойства
+  (`lightcontrol`, `get_lightcontrol`), поэтому доступно из плагина.
+
 ## Следующие шаги реверса
 
 - Разобрать `CameraPivot`, `Shoot`, `HealthScript`, `AugSelect`, `SaveSystem`

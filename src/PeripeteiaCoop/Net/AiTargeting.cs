@@ -57,6 +57,7 @@ internal static class AiTargeting
             _scene = scene;
             Done.Clear();
             Failed.Clear();
+            AiPerception.Clear();
             _loggedFactions = false;
             _dumped = false;
         }
@@ -84,6 +85,14 @@ internal static class AiTargeting
         if (controllers == null || controllers.Length == 0)
         {
             return;
+        }
+
+        // Teach the perception swap where each puppet's body is. Done once per
+        // avatar per scan, independent of the per-controller registration below,
+        // because the swap only needs the collider and not a faction member entry.
+        foreach (int id in network.RemotePlayerIds())
+        {
+            AiPerception.Register(network.GetAvatarRoot(id));
         }
 
         foreach (AIController controller in controllers)

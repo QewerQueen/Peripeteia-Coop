@@ -484,6 +484,7 @@ public sealed class CoopPlugin : BasePlugin
             TryPatch(typeof(CombatFireAtPointTriggerPatch));
             TryPatch(typeof(EnemyControllerUpdatePatch));
             TryPatch(typeof(EnemyMoverLateUpdatePatch));
+            TryPatch(typeof(AiCalculateThreatPatch));
             TryPatch(typeof(StoryConversationStartPatch));
             TryPatch(typeof(StoryQuestActionPatch));
             TryPatch(typeof(StoryTeleportWalkInPatch));
