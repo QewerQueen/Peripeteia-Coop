@@ -102,6 +102,10 @@ internal sealed class RemoteAvatar
     // child of the current root, so it is rebuilt together with the visual.
     private RemoteHitProxy? _hitProxy;
 
+    // Inert collider on the layer the host's AI uses to detect the player, so
+    // enemies can notice the client. Child of the current root as well.
+    private GameObject? _perceptionProxy;
+
     private int _actionHash;
     private float _actionTime;
     private bool _actionActive;
@@ -1995,6 +1999,23 @@ internal sealed class RemoteAvatar
         }
     }
 
+    /// <summary>
+    /// Switches the AI perception collider on or off. A corpse must not stay a
+    /// standing target for the host's enemies.
+    /// </summary>
+    private void SetPerceptionActive(bool active)
+    {
+        if (_perceptionProxy == null || _perceptionProxy.gameObject == null)
+        {
+            return;
+        }
+
+        if (_perceptionProxy.activeSelf != active)
+        {
+            _perceptionProxy.SetActive(active);
+        }
+    }
+
     private void EnterRagdoll(Vector3 position, Quaternion rotation)
     {
         if (_ragdollActive)
@@ -2017,6 +2038,10 @@ internal sealed class RemoteAvatar
 
         // A dead body must not be lootable by the teammate.
         EnsureNotSearchable(Root);
+
+        // The perception collider stands for a living body; a corpse must not
+        // keep pretending to be a standing AI target.
+        SetPerceptionActive(false);
 
         if (!CoopPlugin.PlayerDeathRagdoll)
         {
@@ -2452,6 +2477,8 @@ internal sealed class RemoteAvatar
         _corpseDragging = false;
         _dragStart.Clear();
 
+        SetPerceptionActive(true);
+
         try
         {
             foreach (Rigidbody body in _ragdollBodies)
@@ -2793,6 +2820,7 @@ internal sealed class RemoteAvatar
     public void Destroy()
     {
         _hitProxy = null;
+        _perceptionProxy = null;
         _ragdollBodies.Clear();
         _ragdollColliders.Clear();
         _ragdollJoints.Clear();
@@ -2831,6 +2859,7 @@ internal sealed class RemoteAvatar
 
         GameObject capsule = CreateCapsule();
         _hitProxy = CombatSync.AttachHitProxy(capsule, source, null, Id);
+        _perceptionProxy = CombatSync.AttachPerceptionProxy(capsule, source, Id);
         return capsule;
     }
 
@@ -3021,6 +3050,7 @@ internal sealed class RemoteAvatar
         }
 
         _hitProxy = CombatSync.AttachHitProxy(clone, source, _gameAnimator, Id);
+        _perceptionProxy = CombatSync.AttachPerceptionProxy(clone, source, Id);
 
         return clone;
     }

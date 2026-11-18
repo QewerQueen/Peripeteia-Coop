@@ -263,6 +263,130 @@ internal static class CombatSync
         }
     }
 
+    /// <summary>
+    /// Adds an inert collider on the layer the game's AI uses to detect the
+    /// player, so the host's perception rays can find the remote puppet.
+    ///
+    /// The combat proxy lives on the player's own root layer, which is "Ignore
+    /// Raycast" so the mod's own bullet rays stay isolated from the rest of the
+    /// world. The AI, however, looks for the player on the hitbox layer, so
+    /// without a collider there its perception rays pass straight through the
+    /// puppet and enemies never notice the client. The extra capsule only exists
+    /// to be raycast against: it is kinematic and the hitbox layer collides with
+    /// nothing else, so it never pushes the player or the level around.
+    ///
+    /// Returns the created object so the caller can switch it off while the
+    /// puppet is a corpse.
+    /// </summary>
+    public static GameObject? AttachPerceptionProxy(
+        GameObject root,
+        Transform? source,
+        int avatarId
+    )
+    {
+        if (root == null ||
+            CoopPlugin.Settings.Role != CoopRole.Host ||
+            !CoopPlugin.AiEnabled ||
+            !CoopPlugin.AiTargetRemotePlayer ||
+            !CoopPlugin.AiPerceptionCollider)
+        {
+            return null;
+        }
+
+        int layer = ResolvePerceptionLayer(source);
+        if (layer < 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            float height = 1.8f;
+            float radius = 0.3f;
+            Vector3 center = new Vector3(0.0f, 0.9f, 0.0f);
+            CharacterController? controller = source != null
+                ? source.GetComponent<CharacterController>()
+                : null;
+            if (controller != null)
+            {
+                height = Mathf.Max(controller.height, 0.6f);
+                radius = Mathf.Clamp(controller.radius, 0.1f, height * 0.5f);
+                center = controller.center;
+            }
+
+            var proxyObject = new GameObject("PeripeteiaCoop_AiProxy");
+            proxyObject.transform.SetParent(root.transform, false);
+            proxyObject.layer = layer;
+
+            Rigidbody body = proxyObject.AddComponent<Rigidbody>();
+            body.isKinematic = true;
+            body.useGravity = false;
+            body.detectCollisions = true;
+
+            var capsule = proxyObject.AddComponent<CapsuleCollider>();
+            capsule.direction = 1;
+            capsule.center = center;
+            capsule.height = height;
+            capsule.radius = radius;
+            capsule.isTrigger = false;
+
+            CoopPlugin.LogSource.LogInfo(
+                $"[ai] perception collider for avatar {avatarId}: " +
+                $"layer={layer}({LayerMask.LayerToName(layer)}) height={height:F2} radius={radius:F2}."
+            );
+
+            return proxyObject;
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[ai] failed to build the perception collider for avatar {avatarId}: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The layer the game's AI uses to detect the player: the layer of the local
+    /// player's own hitbox colliders. Returns -1 when it cannot be determined.
+    /// </summary>
+    private static int ResolvePerceptionLayer(Transform? localPlayer)
+    {
+        if (localPlayer == null)
+        {
+            return -1;
+        }
+
+        try
+        {
+            foreach (HitBox hitBox in localPlayer.GetComponentsInChildren<HitBox>(true))
+            {
+                if (hitBox != null && hitBox.gameObject != null && hitBox.gameObject.layer != 0)
+                {
+                    return hitBox.gameObject.layer;
+                }
+            }
+
+            foreach (Collider collider in localPlayer.GetComponentsInChildren<Collider>(true))
+            {
+                if (collider != null &&
+                    collider.gameObject != null &&
+                    collider.gameObject != localPlayer.gameObject &&
+                    collider.gameObject.layer != 0)
+                {
+                    return collider.gameObject.layer;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Fall through to the "unknown" result.
+        }
+
+        return -1;
+    }
+
     private static void ApplyCollisionPolicy()
     {
         if (_localController == null)
