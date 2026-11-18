@@ -44,6 +44,7 @@ internal sealed class CoopNetwork : IDisposable
         SaveManifest = 20,
         SaveChunk = 21,
         SaveDone = 22,
+        PlayerState = 23,
     }
 
     [Flags]
@@ -59,7 +60,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 20;
+    private const int ProtocolVersion = 21;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
 
@@ -172,6 +173,26 @@ internal sealed class CoopNetwork : IDisposable
         return _avatars.TryGetValue(id, out RemoteAvatar? avatar) ? avatar : null;
     }
 
+    /// <summary>
+    /// The first remote teammate puppet, used by the on-screen teammate panel.
+    /// Null while nobody is connected or the puppet has not spawned yet.
+    /// </summary>
+    public RemoteAvatar? Teammate
+    {
+        get
+        {
+            foreach (RemoteAvatar avatar in _avatars.Values)
+            {
+                if (avatar != null)
+                {
+                    return avatar;
+                }
+            }
+
+            return null;
+        }
+    }
+
     public CoopNetwork(CoopSettings settings)
     {
         _settings = settings;
@@ -254,6 +275,7 @@ internal sealed class CoopNetwork : IDisposable
         AiTargeting.Tick(localPlayer);
         PlayerStateSync.Tick(localPlayer);
         PlayerStateSync.FlushPending();
+        TeammateStateSync.Tick(localPlayer);
         StorySync.Tick(localPlayer);
 
         string localScene = localPlayer != null ? localPlayer.gameObject.scene.name : string.Empty;
@@ -983,6 +1005,48 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     /// <summary>
+    /// Sends the local player's health, Marie skin and death flag for the
+    /// teammate panel and for giving the two co-op characters different models.
+    /// Health stays personal; this only mirrors it for display.
+    /// </summary>
+    public void SendPlayerState(int hp, int maxHp, int skin, bool dead)
+    {
+        if (_net.ConnectedPeersCount == 0 || _localId < 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        WritePlayerState(writer, _localId, hp, maxHp, skin, dead);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            _net.SendToAll(writer, DeliveryMethod.Sequenced);
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.Sequenced);
+    }
+
+    private static void WritePlayerState(
+        NetDataWriter writer,
+        int senderId,
+        int hp,
+        int maxHp,
+        int skin,
+        bool dead
+    )
+    {
+        writer.Put((byte)PacketType.PlayerState);
+        writer.Put(senderId);
+        writer.Put(hp);
+        writer.Put(maxHp);
+        writer.Put(skin);
+        writer.Put(dead);
+    }
+
+    /// <summary>
     /// Client only: reports damage the local player dealt to an NPC. The host
     /// owns every NPC, so without this the hit is thrown away as soon as the next
     /// snapshot overwrites the mirrored health, and the enemy never turns on the
@@ -1068,6 +1132,7 @@ internal sealed class CoopNetwork : IDisposable
         writer.Put(snapshot.AnimatorHash);
         writer.Put(snapshot.AnimatorTime);
         writer.Put(snapshot.AnimatorActive);
+        writer.Put(snapshot.AttachmentState ?? string.Empty);
     }
 
     private static WeaponSnapshot ReadWeaponState(NetDataReader reader, out int senderId)
@@ -1126,6 +1191,7 @@ internal sealed class CoopNetwork : IDisposable
         int animatorHash = reader.GetInt();
         float animatorTime = reader.GetFloat();
         bool animatorActive = reader.GetBool();
+        string attachmentState = reader.GetString();
 
         return new WeaponSnapshot(
             visible,
@@ -1151,7 +1217,8 @@ internal sealed class CoopNetwork : IDisposable
             animatorHash,
             animatorTime,
             animatorActive,
-            null
+            null,
+            attachmentState
         );
     }
 
@@ -1919,6 +1986,7 @@ internal sealed class CoopNetwork : IDisposable
             type != PacketType.NpcDamage &&
             type != PacketType.NpcShot &&
             type != PacketType.CorpsePose &&
+            type != PacketType.PlayerState &&
             type != PacketType.SaveChunk)
         {
             CoopPlugin.LogSource.LogInfo($"[net] Received {type} from {peer.Address}:{peer.Port}.");
@@ -1972,6 +2040,10 @@ internal sealed class CoopNetwork : IDisposable
 
             case PacketType.PlayerDeath:
                 ReceivePlayerDeath(peer, reader);
+                break;
+
+            case PacketType.PlayerState:
+                ReceivePlayerState(peer, reader);
                 break;
 
             case PacketType.StoryEvent:
@@ -2574,6 +2646,16 @@ internal sealed class CoopNetwork : IDisposable
             reader.GetFloat()
         );
 
+        // Host authority: the host never takes a client's idle item state (its
+        // own world is the authority). A client's drag stream (moving) and its
+        // discrete pickup/drop/break events still come through.
+        if (CoopPlugin.ItemsHostAuthoritative &&
+            _settings.Role == CoopRole.Host &&
+            !moving)
+        {
+            return;
+        }
+
         bool applied = ItemSync.Apply(key, alive, active, position, rotation, moving);
 
         // The host also forwards a client's change to any other clients. With
@@ -2669,6 +2751,37 @@ internal sealed class CoopNetwork : IDisposable
             if (other != peer)
             {
                 other.Send(relay, DeliveryMethod.ReliableOrdered);
+            }
+        }
+    }
+
+    private void ReceivePlayerState(NetPeer peer, NetDataReader reader)
+    {
+        int senderId = reader.GetInt();
+        int hp = reader.GetInt();
+        int maxHp = reader.GetInt();
+        int skin = reader.GetInt();
+        bool dead = reader.GetBool();
+
+        if (senderId == _localId || senderId < 0)
+        {
+            return;
+        }
+
+        TeammateStateSync.Apply(senderId, hp, maxHp, skin, dead);
+
+        if (_settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        var relay = new NetDataWriter();
+        WritePlayerState(relay, senderId, hp, maxHp, skin, dead);
+        foreach (NetPeer other in _net.ConnectedPeerList)
+        {
+            if (other != peer)
+            {
+                other.Send(relay, DeliveryMethod.Sequenced);
             }
         }
     }

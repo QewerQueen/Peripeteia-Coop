@@ -650,7 +650,8 @@ internal static class WeaponSync
             animatorHash,
             animatorTime,
             animatorActive,
-            weapon
+            weapon,
+            CoopPlugin.WeaponSyncAttachments ? BuildVisibilityMap(weapon) : string.Empty
         );
 
         return true;
@@ -776,6 +777,116 @@ internal static class WeaponSync
         }
 
         return PathBuilder.ToString();
+    }
+
+    /// <summary>
+    /// Captures which parts of the weapon are visible (attachments, magazine,
+    /// folded stock, sight). The receiver replays this onto the cloned weapon so
+    /// an attachment shows even when the local scene has no world item with the
+    /// exact same configuration to clone. Format:
+    /// "relative/path=&lt;bits&gt;;..." where bit 0 is renderer.enabled and bit 1
+    /// is GameObject.activeSelf.
+    /// </summary>
+    private static string BuildVisibilityMap(Transform weapon)
+    {
+        if (weapon == null)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder(256);
+        foreach (Renderer renderer in weapon.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer == null || renderer.gameObject == null)
+            {
+                continue;
+            }
+
+            string path = BuildRelativePath(renderer.transform, weapon);
+            if (string.IsNullOrEmpty(path))
+            {
+                continue;
+            }
+
+            int bits = (renderer.enabled ? 1 : 0) |
+                       (renderer.gameObject.activeSelf ? 2 : 0);
+            if (builder.Length > 0)
+            {
+                builder.Append(';');
+            }
+
+            builder.Append(path);
+            builder.Append('=');
+            builder.Append(bits);
+
+            // A pathological weapon should not blow up the packet.
+            if (builder.Length > 4000)
+            {
+                return string.Empty;
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Replays a visibility map (see <see cref="BuildVisibilityMap"/>) onto a
+    /// cloned weapon. Parts are matched by relative path, so anything that has
+    /// no counterpart in the clone is left at the template's default.
+    /// </summary>
+    public static void ApplyAttachmentState(GameObject? visual, string? state)
+    {
+        if (visual == null || string.IsNullOrEmpty(state))
+        {
+            return;
+        }
+
+        var map = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (string entry in state.Split(';'))
+        {
+            int equals = entry.LastIndexOf('=');
+            if (equals <= 0 || equals >= entry.Length - 1)
+            {
+                continue;
+            }
+
+            if (int.TryParse(entry.Substring(equals + 1), out int bits))
+            {
+                map[entry.Substring(0, equals)] = bits;
+            }
+        }
+
+        if (map.Count == 0)
+        {
+            return;
+        }
+
+        Transform root = visual.transform;
+        foreach (Renderer renderer in visual.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer == null || renderer.gameObject == null)
+            {
+                continue;
+            }
+
+            string path = BuildRelativePath(renderer.transform, root);
+            if (path.Length == 0 || !map.TryGetValue(path, out int bits))
+            {
+                continue;
+            }
+
+            bool enabled = (bits & 1) != 0;
+            bool active = (bits & 2) != 0;
+            if (renderer.enabled != enabled)
+            {
+                renderer.enabled = enabled;
+            }
+
+            if (renderer.gameObject.activeSelf != active)
+            {
+                renderer.gameObject.SetActive(active);
+            }
+        }
     }
 
     /// <summary>
@@ -984,7 +1095,8 @@ internal readonly struct WeaponSnapshot
         int animatorHash,
         float animatorTime,
         bool animatorActive,
-        Transform? weaponTransform
+        Transform? weaponTransform,
+        string attachmentState
     )
     {
         Visible = visible;
@@ -1011,6 +1123,7 @@ internal readonly struct WeaponSnapshot
         AnimatorTime = animatorTime;
         AnimatorActive = animatorActive;
         WeaponTransform = weaponTransform;
+        AttachmentState = attachmentState;
     }
 
     public bool Visible { get; }
@@ -1070,9 +1183,15 @@ internal readonly struct WeaponSnapshot
 
     public Transform? WeaponTransform { get; }
 
+    /// <summary>
+    /// Sender's per-part visibility map (attachments, magazine, folded stock).
+    /// Empty when the sender could not build one.
+    /// </summary>
+    public string AttachmentState { get; }
+
     public string Descriptor =>
         $"{ItemName}|{TemplateName}|{VisualHash}|{ParentPath}|{MuzzlePath}|" +
-        $"{RightGrabPath}|{LeftGrabPath}|{OneHanded}|{HandRotationMod}";
+        $"{RightGrabPath}|{LeftGrabPath}|{OneHanded}|{HandRotationMod}|{AttachmentState}";
 }
 
 [HarmonyPatch(typeof(Shoot), "Fire", new Type[] { typeof(LayerMask), typeof(int) })]

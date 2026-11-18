@@ -60,6 +60,7 @@ internal sealed class RemoteAvatar
     private string _weaponItemName = string.Empty;
     private string _weaponTemplateName = string.Empty;
     private int _weaponVisualHash;
+    private string _weaponAttachmentState = string.Empty;
     private Vector3 _weaponLocalPosition;
     private Quaternion _weaponLocalRotation = Quaternion.identity;
     private Vector3 _weaponLocalScale = Vector3.one;
@@ -124,6 +125,13 @@ internal sealed class RemoteAvatar
     private int _ragdollProbeLayer = -1;
     private bool _dead;
     private bool _ragdollActive;
+
+    // Mirrored teammate state: health for the on-screen panel, and the skin
+    // index used to give the two co-op characters different models.
+    private int _healthHp;
+    private int _healthMaxHp;
+    private bool _healthKnown;
+    private int _skinVersion = -1;
 
     // A simulated ragdoll keeps sliding for a moment (the limb colliders push
     // each other apart) and the teammate can bump it, which looked like the
@@ -227,6 +235,13 @@ internal sealed class RemoteAvatar
     /// <summary>True while the remote player is dead and the body is down.</summary>
     public bool IsDead => _dead;
 
+    /// <summary>True once a teammate-state packet with health has arrived.</summary>
+    public bool HealthKnown => _healthKnown;
+
+    public int HealthHp => _healthHp;
+
+    public int HealthMaxHp => _healthMaxHp;
+
     /// <summary>
     /// True after the remote player has touched the ground at least once in
     /// the current scene. Spawn points can be high above the map while the save
@@ -285,6 +300,35 @@ internal sealed class RemoteAvatar
 
         RemoteScene = newScene;
         RemoteReady = ready;
+    }
+
+    /// <summary>
+    /// Stores the teammate's health for the on-screen panel. Health stays owned
+    /// by the other machine; this is a mirror for display only.
+    /// </summary>
+    public void SetHealth(int hp, int maxHp, bool dead)
+    {
+        _healthKnown = true;
+        _healthHp = Mathf.Max(0, hp);
+        _healthMaxHp = Mathf.Max(1, maxHp);
+    }
+
+    /// <summary>
+    /// Switches the puppet to the teammate's own Marie skin so the two co-op
+    /// characters do not look like clones of each other.
+    /// </summary>
+    public void SetSkin(int version)
+    {
+        if (version < 0 || version == _skinVersion)
+        {
+            return;
+        }
+
+        _skinVersion = version;
+        if (CoopPlugin.PlayerSyncSkins && Root != null)
+        {
+            PlayerSkinSync.ApplySkin(Root, version);
+        }
     }
 
     /// <summary>
@@ -588,6 +632,13 @@ internal sealed class RemoteAvatar
             : snapshot.ParentPath;
         _weaponMuzzlePath = snapshot.MuzzlePath;
         _weaponVisualHash = snapshot.VisualHash;
+        string attachmentState = snapshot.AttachmentState ?? string.Empty;
+        bool attachmentsChanged = !string.Equals(
+            _weaponAttachmentState,
+            attachmentState,
+            StringComparison.Ordinal
+        );
+        _weaponAttachmentState = attachmentState;
         _weaponLocalPosition = snapshot.LocalPosition;
         _weaponLocalRotation = snapshot.LocalRotation;
         _weaponLocalScale = snapshot.LocalScale;
@@ -621,6 +672,11 @@ internal sealed class RemoteAvatar
             _weaponHandGripLocalPosition = snapshot.HandGripLocalPosition;
             _weaponHandGripLocalRotation = snapshot.HandGripLocalRotation;
             _weaponHasHandGrip = snapshot.HasHandGrip;
+        }
+
+        if (attachmentsChanged && _weaponVisual != null)
+        {
+            WeaponSync.ApplyAttachmentState(_weaponVisual, _weaponAttachmentState);
         }
 
         _weaponIk?.SetHandRotationMod(_weaponHandRotationMod);
@@ -1018,6 +1074,7 @@ internal sealed class RemoteAvatar
         _weaponHoldLogged = false;
         visual.transform.SetParent(parent, false);
         _weaponVisual = visual;
+        WeaponSync.ApplyAttachmentState(visual, _weaponAttachmentState);
         _weaponHand = useHandAnchor ? hand : null;
         _weaponUseHandAnchor = useHandAnchor;
         _weaponVisual.transform.localPosition = _weaponLocalPosition;
@@ -3034,6 +3091,14 @@ internal sealed class RemoteAvatar
         clone.SetActive(true);
 
         CacheSkeleton(clone);
+
+        // The clone was built from the local player, so it starts on the local
+        // player's Marie skin. Re-apply the teammate's own skin when we already
+        // know it, otherwise both co-op characters look identical.
+        if (_skinVersion >= 0 && CoopPlugin.PlayerSyncSkins)
+        {
+            PlayerSkinSync.ApplySkin(clone, _skinVersion);
+        }
 
         // The body clone is made from the local player, so it carries the local
         // player's currently equipped weapon. Remove it; WeaponSync attaches a

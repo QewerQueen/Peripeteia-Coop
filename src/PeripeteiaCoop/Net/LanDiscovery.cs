@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text;
 using LiteNetLib;
 using UnityEngine;
@@ -58,6 +60,12 @@ internal static class LanDiscovery
 
     private static readonly Dictionary<string, HostEntry> HostsByKey = new();
     private static readonly List<HostEntry> Snapshot = new();
+
+    // Directed-broadcast endpoints of every usable interface. This is what makes
+    // discovery work on a virtual LAN such as RadminVPN, whose subnet is not the
+    // default route that a plain 255.255.255.255 broadcast would use.
+    private static readonly List<IPEndPoint> BroadcastTargets = new();
+    private static float _nextBroadcastRefresh;
 
     public static bool IsAdvertising => _advertising;
 
@@ -209,6 +217,7 @@ internal static class LanDiscovery
                 // so also send straight to loopback: that is what makes the two
                 // local test instances see each other.
                 _net.SendUnconnectedMessage(_beacon, new IPEndPoint(IPAddress.Loopback, DiscoveryPort));
+                SendToSubnetBroadcasts();
             }
             catch (Exception exception)
             {
@@ -271,6 +280,117 @@ internal static class LanDiscovery
 
         _net = null;
         _listener = null;
+    }
+
+    /// <summary>
+    /// Sends the beacon to the directed-broadcast address of every usable
+    /// interface (Ethernet, Wi-Fi, Hamachi, RadminVPN, ...). A plain
+    /// 255.255.255.255 broadcast only leaves the default-route adapter, so
+    /// without this a host on a virtual LAN would never be discovered.
+    /// </summary>
+    private static void SendToSubnetBroadcasts()
+    {
+        if (_net == null)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime >= _nextBroadcastRefresh)
+        {
+            _nextBroadcastRefresh = Time.unscaledTime + 10.0f;
+            RefreshBroadcastTargets();
+        }
+
+        foreach (IPEndPoint target in BroadcastTargets)
+        {
+            try
+            {
+                _net.SendUnconnectedMessage(_beacon, target);
+            }
+            catch (Exception)
+            {
+                // One dead adapter must not stop the other targets.
+            }
+        }
+    }
+
+    /// <summary>Rebuilds the directed-broadcast list from the current adapters.</summary>
+    private static void RefreshBroadcastTargets()
+    {
+        BroadcastTargets.Clear();
+
+        try
+        {
+            foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (nic == null ||
+                    nic.OperationalStatus != OperationalStatus.Up ||
+                    nic.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                {
+                    continue;
+                }
+
+                IPInterfaceProperties properties;
+                try
+                {
+                    properties = nic.GetIPProperties();
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+
+                foreach (UnicastIPAddressInformation info in properties.UnicastAddresses)
+                {
+                    if (info == null ||
+                        info.Address == null ||
+                        info.Address.AddressFamily != AddressFamily.InterNetwork ||
+                        info.IPv4Mask == null)
+                    {
+                        continue;
+                    }
+
+                    byte[] ip = info.Address.GetAddressBytes();
+                    byte[] mask = info.IPv4Mask.GetAddressBytes();
+                    if (ip.Length != 4 || mask.Length != 4)
+                    {
+                        continue;
+                    }
+
+                    var broadcast = new byte[4];
+                    bool usable = false;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        broadcast[i] = (byte)(ip[i] | (byte)~mask[i]);
+                        if (mask[i] != 255)
+                        {
+                            usable = true;
+                        }
+                    }
+
+                    // A /32 host address has no broadcast; skip it.
+                    if (!usable)
+                    {
+                        continue;
+                    }
+
+                    BroadcastTargets.Add(new IPEndPoint(new IPAddress(broadcast), DiscoveryPort));
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[lan] could not enumerate network interfaces: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+
+        if (CoopPlugin.ProbeEnabled && BroadcastTargets.Count > 0)
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[lan] subnet broadcast targets: {string.Join(", ", BroadcastTargets.ConvertAll(target => target.ToString()))}"
+            );
+        }
     }
 
     private static void RebuildBeacon()

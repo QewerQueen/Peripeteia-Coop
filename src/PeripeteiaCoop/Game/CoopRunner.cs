@@ -385,12 +385,76 @@ public sealed class CoopRunner : MonoBehaviour
 
     private void OnGUI()
     {
-        if (!CoopPlugin.ShowStatusOverlay || CoopPlugin.Network == null)
+        if (CoopPlugin.Network == null)
         {
             return;
         }
 
-        float width = Mathf.Min(760.0f, Screen.width - 20.0f);
-        GUI.Box(new Rect(10.0f, 10.0f, width, 26.0f), CoopPlugin.Network.StatusText);
+        if (CoopPlugin.ShowStatusOverlay)
+        {
+            float width = Mathf.Min(760.0f, Screen.width - 20.0f);
+            GUI.Box(new Rect(10.0f, 10.0f, width, 26.0f), CoopPlugin.Network.StatusText);
+        }
+
+        if (CoopPlugin.TeammateHud)
+        {
+            DrawTeammateHud();
+        }
+    }
+
+    /// <summary>
+    /// Small panel with the teammate's name, health bar and down/dead state.
+    /// Drawn with plain rects because GUILayout is stripped from this IL2CPP
+    /// build.
+    /// </summary>
+    private static void DrawTeammateHud()
+    {
+        RemoteAvatar? teammate = CoopPlugin.Network?.Teammate;
+        if (teammate == null)
+        {
+            return;
+        }
+
+        const float width = 240.0f;
+        float x = Mathf.Max(10.0f, Screen.width - width - 10.0f);
+        const float y = 10.0f;
+        var panel = new Rect(x, y, width, 50.0f);
+
+        Color previous = GUI.color;
+        GUI.color = new Color(0.06f, 0.07f, 0.08f, 0.85f);
+        GUI.Box(panel, GUIContent.none);
+        GUI.color = previous;
+
+        string name = string.IsNullOrEmpty(teammate.Name) ? "Teammate" : teammate.Name;
+        string line = teammate.HealthKnown
+            ? $"{name}   {teammate.HealthHp}/{teammate.HealthMaxHp}" +
+              (teammate.IsDead ? "   DOWN" : string.Empty)
+            : $"{name}   ...";
+        GUI.Label(new Rect(x + 8.0f, y + 3.0f, width - 16.0f, 20.0f), line);
+
+        var barBack = new Rect(x + 8.0f, y + 28.0f, width - 16.0f, 14.0f);
+        GUI.color = new Color(0.16f, 0.05f, 0.05f, 0.9f);
+        GUI.Box(barBack, GUIContent.none);
+
+        if (teammate.HealthKnown && teammate.HealthMaxHp > 0)
+        {
+            float ratio = Mathf.Clamp01((float)teammate.HealthHp / teammate.HealthMaxHp);
+            var barFill = new Rect(
+                barBack.x + 1.0f,
+                barBack.y + 1.0f,
+                (barBack.width - 2.0f) * ratio,
+                barBack.height - 2.0f
+            );
+            GUI.color = teammate.IsDead
+                ? new Color(0.35f, 0.35f, 0.35f, 0.9f)
+                : Color.Lerp(
+                    new Color(0.75f, 0.15f, 0.15f, 0.95f),
+                    new Color(0.2f, 0.7f, 0.25f, 0.95f),
+                    ratio
+                );
+            GUI.Box(barFill, GUIContent.none);
+        }
+
+        GUI.color = previous;
     }
 }

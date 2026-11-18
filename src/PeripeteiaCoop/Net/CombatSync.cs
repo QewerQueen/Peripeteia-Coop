@@ -75,6 +75,20 @@ internal static class CombatSync
         ApplyCollisionPolicy();
     }
 
+    /// <summary>
+    /// Registers an extra collider (a limb capsule) with an existing proxy so
+    /// the shot raycast can map a hit back to the player it belongs to.
+    /// </summary>
+    public static void RegisterProxyCollider(RemoteHitProxy proxy, Collider? collider)
+    {
+        if (proxy == null || collider == null)
+        {
+            return;
+        }
+
+        ProxyByCollider[collider.GetInstanceID()] = proxy;
+    }
+
     public static void UnregisterProxy(RemoteHitProxy proxy)
     {
         if (proxy == null)
@@ -268,6 +282,7 @@ internal static class CombatSync
             var proxy = proxyObject.AddComponent<RemoteHitProxy>();
             proxy.Configure(avatarId, capsule, headSphere, height);
             proxy.BindHead(headBone, headOffset);
+            BuildLimbColliders(proxy, animator, layer, height);
 
             ApplyCollisionPolicy();
 
@@ -383,6 +398,79 @@ internal static class CombatSync
                 $"{exception.GetType().Name}: {exception.Message}"
             );
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Adds a capsule collider per limb segment so the whole remote body can be
+    /// hit, not just the torso capsule and the head sphere. The capsules follow
+    /// the animated bones (see <see cref="RemoteHitProxy"/>), so an extended arm
+    /// or a raised weapon is a real target.
+    /// </summary>
+    private static void BuildLimbColliders(
+        RemoteHitProxy proxy,
+        Animator? animator,
+        int layer,
+        float bodyHeight
+    )
+    {
+        if (!CoopPlugin.CombatLimbHitboxes || animator == null)
+        {
+            return;
+        }
+
+        bool humanoid;
+        try
+        {
+            humanoid = animator.isHuman;
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        if (!humanoid)
+        {
+            return;
+        }
+
+        // Limb thickness scaled to the body. Arms are thinner than legs; both
+        // are clamped so an unusual controller height cannot produce a giant or
+        // invisible collider.
+        float armRadius = Mathf.Clamp(bodyHeight * 0.032f, 0.035f, 0.08f);
+        float legRadius = Mathf.Clamp(bodyHeight * 0.05f, 0.05f, 0.12f);
+
+        AddLimb(proxy, animator, HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftLowerArm, armRadius, layer);
+        AddLimb(proxy, animator, HumanBodyBones.RightUpperArm, HumanBodyBones.RightLowerArm, armRadius, layer);
+        AddLimb(proxy, animator, HumanBodyBones.LeftLowerArm, HumanBodyBones.LeftHand, armRadius, layer);
+        AddLimb(proxy, animator, HumanBodyBones.RightLowerArm, HumanBodyBones.RightHand, armRadius, layer);
+        AddLimb(proxy, animator, HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg, legRadius, layer);
+        AddLimb(proxy, animator, HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg, legRadius, layer);
+        AddLimb(proxy, animator, HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot, legRadius, layer);
+        AddLimb(proxy, animator, HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot, legRadius, layer);
+    }
+
+    private static void AddLimb(
+        RemoteHitProxy proxy,
+        Animator animator,
+        HumanBodyBones from,
+        HumanBodyBones to,
+        float radius,
+        int layer
+    )
+    {
+        try
+        {
+            Transform? a = animator.GetBoneTransform(from);
+            Transform? b = animator.GetBoneTransform(to);
+            if (a != null && b != null)
+            {
+                proxy.BindLimb(a, b, radius, layer);
+            }
+        }
+        catch (Exception)
+        {
+            // A missing bone simply means one fewer limb capsule.
         }
     }
 

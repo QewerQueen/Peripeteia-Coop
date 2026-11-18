@@ -35,6 +35,11 @@ public sealed class CoopMenu : MonoBehaviour
     private GUIStyle? _hostButtonStyle;
     private bool _panelLogged;
 
+    // Manual "connect by IP" entry, for networks where the LAN beacon does not
+    // get through (RadminVPN, Hamachi, plain internet with a forwarded port).
+    private string _manualAddress = string.Empty;
+    private bool _ipFieldBroken;
+
     /// <summary>Open/close the panel from the menu button or a hotkey.</summary>
     public static void Toggle()
     {
@@ -321,7 +326,7 @@ public sealed class CoopMenu : MonoBehaviour
         EnsureStyles();
 
         float width = 560.0f;
-        float height = 520.0f;
+        float height = 620.0f;
         var rect = new Rect(
             (Screen.width - width) / 2.0f,
             (Screen.height - height) / 2.0f,
@@ -379,7 +384,8 @@ public sealed class CoopMenu : MonoBehaviour
         {
             GUI.Label(
                 new Rect(x, y, w, 44.0f),
-                "  Nobody found yet. Make sure the host runs the mod and is on the same network.",
+                "  Nobody found yet. Make sure the host runs the mod and is on the same network. " +
+                "On a VPN such as RadminVPN, use the field below with the host's VPN IP.",
                 _labelStyle
             );
             y += 50.0f;
@@ -411,6 +417,18 @@ public sealed class CoopMenu : MonoBehaviour
 
             y += 6.0f;
         }
+
+        GUI.Label(new Rect(x, y, w, 22.0f), "Connect by IP (RadminVPN / Hamachi / internet):", _labelStyle);
+        y += 24.0f;
+        float connectW = 150.0f;
+        float fieldW = w - connectW - 10.0f;
+        _manualAddress = DrawAddressField(new Rect(x, y, fieldW, 30.0f));
+        if (GUI.Button(new Rect(x + fieldW + 10.0f, y, connectW, 30.0f), "Connect by IP", _buttonStyle))
+        {
+            ConnectManual();
+        }
+
+        y += 40.0f;
 
         float half = (w - 10.0f) / 2.0f;
         if (GUI.Button(new Rect(x, y, half, 34.0f), "Refresh", _buttonStyle))
@@ -479,6 +497,70 @@ public sealed class CoopMenu : MonoBehaviour
         {
             _open = false;
         }
+    }
+
+    /// <summary>
+    /// Draws the free-text "connect by IP" field. GUI.TextField is present in the
+    /// game's interop assemblies, but if a future build ever strips it the menu
+    /// must not break, so a failure degrades to a plain label.
+    /// </summary>
+    private string DrawAddressField(Rect rect)
+    {
+        if (_ipFieldBroken)
+        {
+            GUI.Label(rect, _manualAddress, _labelStyle);
+            return _manualAddress;
+        }
+
+        try
+        {
+            return GUI.TextField(rect, _manualAddress, 32);
+        }
+        catch (Exception exception)
+        {
+            _ipFieldBroken = true;
+            CoopPlugin.LogSource.LogWarning(
+                $"[menu] GUI.TextField unavailable ({exception.GetType().Name}); " +
+                "use -coop-connect <ip> on the command line instead."
+            );
+            GUI.Label(rect, _manualAddress, _labelStyle);
+            return _manualAddress;
+        }
+    }
+
+    /// <summary>Joins the host entered in the "connect by IP" field.</summary>
+    private void ConnectManual()
+    {
+        string text = _manualAddress.Trim();
+        if (text.Length == 0)
+        {
+            _status = "Enter the host address, for example 26.12.34.56:7777.";
+            return;
+        }
+
+        string address = text;
+        int port = 7777;
+        int colon = text.LastIndexOf(':');
+        if (colon > 0 && colon < text.Length - 1)
+        {
+            if (int.TryParse(text.Substring(colon + 1), out int parsed) &&
+                parsed > 0 &&
+                parsed <= 65535)
+            {
+                port = parsed;
+                address = text.Substring(0, colon);
+            }
+        }
+
+        if (address.Length == 0)
+        {
+            _status = "Enter the host address, for example 26.12.34.56:7777.";
+            return;
+        }
+
+        CoopPlugin.JoinSession(address, port, CoopPlugin.DefaultPlayerName);
+        _status = $"Connecting to {address}:{port}...";
+        _open = false;
     }
 
     private void EnsureStyles()

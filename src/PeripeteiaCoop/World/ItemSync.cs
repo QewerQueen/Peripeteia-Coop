@@ -126,6 +126,16 @@ internal static class ItemSync
     // pickup, so it must not be announced back as a fresh local pickup.
     private static int _remoteApplyDepth;
 
+    /// <summary>
+    /// True when this machine may broadcast the authoritative world-item state.
+    /// With Items.HostAuthoritative only the host is the authority: a client
+    /// sends just its own drag stream and discrete events as requests, and
+    /// applies whatever the host broadcasts. Legacy peer-to-peer mode (the
+    /// option off) keeps both sides broadcasting.
+    /// </summary>
+    private static bool SendsAuthoritativeState =>
+        !CoopPlugin.ItemsHostAuthoritative || CoopPlugin.Settings.Role == CoopRole.Host;
+
     public static void Register(ItemInfo? item)
     {
         if (item == null || item.gameObject == null)
@@ -1115,15 +1125,23 @@ internal static class ItemSync
                 continue;
             }
 
-            CoopPlugin.Network?.SendItemState(
-                pair.Key,
-                false,
-                false,
-                Vector3.zero,
-                Quaternion.identity,
-                false,
-                reliable: true
-            );
+            // A client never announces a disappearance on its own: the host is
+            // the authority, and the pickup/drop/break event that caused it has
+            // already been sent as a request.
+            if (SendsAuthoritativeState)
+            {
+                CoopPlugin.Network?.SendItemState(
+                    pair.Key,
+                    false,
+                    false,
+                    Vector3.zero,
+                    Quaternion.identity,
+                    false,
+                    reliable: true
+                );
+                CoopPlugin.LogSource.LogInfo($"[items] item disappeared key='{pair.Key}'.");
+            }
+
             LastSent[pair.Key] = new ItemState(
                 false,
                 false,
@@ -1133,7 +1151,6 @@ internal static class ItemSync
             );
             PreviouslyKnownKeys.Remove(pair.Key);
             SeenActiveKeys.Remove(pair.Key);
-            CoopPlugin.LogSource.LogInfo($"[items] item disappeared key='{pair.Key}'.");
         }
 
         foreach (string staleKey in staleKeys)
@@ -1161,6 +1178,16 @@ internal static class ItemSync
                                      previous.Active != state.Active;
             LastSent[group.Key] = state;
             PreviouslyKnownKeys.Add(group.Key);
+
+            // Host authority: a client only streams the object it is actively
+            // dragging. Its idle world comes from the host's authoritative
+            // state, so it must not broadcast its own (possibly different)
+            // version and fight the host.
+            if (!SendsAuthoritativeState && !state.Moving)
+            {
+                continue;
+            }
+
             _sentChanges++;
             CoopPlugin.Network?.SendItemState(
                 group.Key,

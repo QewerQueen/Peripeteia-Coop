@@ -8,11 +8,16 @@ namespace PeripeteiaCoop;
 /// script, collider and rigidbody stripped, so without this component bullets
 /// pass straight through the other player and you can walk through them.
 ///
-/// The proxy owns two colliders: a capsule for the body and a small sphere for
-/// the head. They sit on the same physics layer as the local player (see
+/// The proxy owns a capsule for the torso, a small sphere for the head and a
+/// set of capsules that follow the arm and leg bones. The limb capsules are what
+/// makes the whole body hittable: the torso capsule alone misses an extended
+/// arm, so shots at a raised weapon or a reaching hand used to fly straight
+/// through the teammate.
+///
+/// Everything sits on the same physics layer as the local player (see
 /// <see cref="CombatSync.ResolveProxyLayer"/>), so the local CharacterController
-/// is blocked by the other player and the mod's own shot raycast can tell body
-/// and head hits apart.
+/// is blocked by the other player and the mod's own shot raycast can tell body,
+/// head and limb hits apart.
 ///
 /// This type is injected into IL2CPP at runtime, so it must stay a plain
 /// MonoBehaviour with a parameterless constructor.
@@ -24,6 +29,15 @@ public sealed class RemoteHitProxy : MonoBehaviour
     private Transform? _headBone;
     private Transform? _headCollider;
     private Vector3 _headOffset;
+
+    // Limb capsules. A fixed array keeps the injected type free of generic
+    // collections of custom types; there are at most eight limb segments.
+    private const int MaxLimbs = 8;
+    private readonly Transform?[] _limbA = new Transform?[MaxLimbs];
+    private readonly Transform?[] _limbB = new Transform?[MaxLimbs];
+    private readonly CapsuleCollider?[] _limbCapsule = new CapsuleCollider?[MaxLimbs];
+    private readonly float[] _limbRadius = new float[MaxLimbs];
+    private int _limbCount;
 
     /// <summary>Co-op id of the player this proxy stands for (host = 0).</summary>
     public int AvatarId { get; private set; }
@@ -53,6 +67,37 @@ public sealed class RemoteHitProxy : MonoBehaviour
         _headCollider = transform.Find("PeripeteiaCoop_HitProxy_Head");
     }
 
+    /// <summary>
+    /// Adds a capsule collider that spans one limb segment between two bones.
+    /// <paramref name="radius"/> is the limb thickness in world units. The
+    /// capsule is repositioned to match the animated bones every frame.
+    /// </summary>
+    public void BindLimb(Transform? a, Transform? b, float radius, int layer)
+    {
+        if (a == null || b == null || _limbCount >= MaxLimbs)
+        {
+            return;
+        }
+
+        var limbObject = new GameObject("PeripeteiaCoop_HitProxy_Limb");
+        limbObject.transform.SetParent(transform, false);
+        limbObject.layer = layer;
+
+        var capsule = limbObject.AddComponent<CapsuleCollider>();
+        capsule.direction = 1;
+        capsule.radius = radius;
+        capsule.height = Mathf.Max(radius * 2.0f, Vector3.Distance(a.position, b.position) + radius);
+        capsule.isTrigger = false;
+
+        CombatSync.RegisterProxyCollider(this, capsule);
+
+        _limbA[_limbCount] = a;
+        _limbB[_limbCount] = b;
+        _limbCapsule[_limbCount] = capsule;
+        _limbRadius[_limbCount] = radius;
+        _limbCount++;
+    }
+
     public bool IsHead(int colliderId)
     {
         return _headColliderId != 0 && colliderId == _headColliderId;
@@ -65,6 +110,12 @@ public sealed class RemoteHitProxy : MonoBehaviour
 
     private void LateUpdate()
     {
+        UpdateHead();
+        UpdateLimbs();
+    }
+
+    private void UpdateHead()
+    {
         if (_headBone == null || _headCollider == null)
         {
             return;
@@ -76,6 +127,44 @@ public sealed class RemoteHitProxy : MonoBehaviour
         }
 
         _headCollider.position = _headBone.position + _headOffset;
+    }
+
+    private void UpdateLimbs()
+    {
+        for (int i = 0; i < _limbCount; i++)
+        {
+            Transform? a = _limbA[i];
+            Transform? b = _limbB[i];
+            CapsuleCollider? capsule = _limbCapsule[i];
+            if (a == null || b == null || capsule == null)
+            {
+                continue;
+            }
+
+            if (a.gameObject == null || b.gameObject == null ||
+                !a.gameObject.activeInHierarchy || !b.gameObject.activeInHierarchy)
+            {
+                capsule.enabled = false;
+                continue;
+            }
+
+            Vector3 delta = b.position - a.position;
+            float length = delta.magnitude;
+            if (length < 0.01f)
+            {
+                capsule.enabled = false;
+                continue;
+            }
+
+            capsule.enabled = true;
+            Transform limbTransform = capsule.transform;
+            limbTransform.position = a.position + delta * 0.5f;
+            limbTransform.rotation = Quaternion.FromToRotation(Vector3.up, delta / length);
+
+            float radius = _limbRadius[i];
+            capsule.radius = radius;
+            capsule.height = Mathf.Max(radius * 2.0f, length + radius);
+        }
     }
 
     private void OnDestroy()

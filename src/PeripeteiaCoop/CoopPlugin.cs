@@ -46,9 +46,19 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static float CombatDamageScale { get; private set; } = 1.0f;
 
+    internal static bool CombatLimbHitboxes { get; private set; } = true;
+
+    internal static bool WeaponSyncAttachments { get; private set; } = true;
+
+    internal static bool PlayerSyncSkins { get; private set; } = true;
+
+    internal static bool TeammateHud { get; private set; } = true;
+
     internal static bool ItemsSpawnMissing { get; private set; } = true;
 
     internal static bool ItemsShareKeys { get; private set; } = true;
+
+    internal static bool ItemsHostAuthoritative { get; private set; } = true;
 
     internal static bool AiEnabled { get; private set; } = true;
 
@@ -244,6 +254,34 @@ public sealed class CoopPlugin : BasePlugin
             "Multiplier applied to weapon damage before it is sent to the other player."
         ).Value;
 
+        CombatLimbHitboxes = Config.Bind(
+            "Combat",
+            "LimbHitboxes",
+            true,
+            "Give the remote player capsule hitboxes on the arms and legs (following the animated bones) so shots at a limb register instead of passing through. Turn off to keep only the torso capsule and head sphere."
+        ).Value;
+
+        WeaponSyncAttachments = Config.Bind(
+            "Weapon",
+            "SyncAttachments",
+            true,
+            "Mirror the sender's per-part visibility (attachments, magazine, folded stock) onto the remote weapon visual. Turn off to always show the plain template weapon."
+        ).Value;
+
+        PlayerSyncSkins = Config.Bind(
+            "Player",
+            "SyncSkins",
+            true,
+            "Give the remote teammate a different character model than your own (each peer keeps its own Marie skin), so the two players in co-op do not look like clones of each other."
+        ).Value;
+
+        TeammateHud = Config.Bind(
+            "Player",
+            "TeammateHud",
+            true,
+            "Draw a small panel with the teammate's name, health and down/dead state while connected."
+        ).Value;
+
         ItemsSpawnMissing = Config.Bind(
             "Items",
             "SpawnMissing",
@@ -256,6 +294,13 @@ public sealed class CoopPlugin : BasePlugin
             "ShareKeyItems",
             true,
             "Key/quest items (the item a keycard or access point checks for) are not synchronized as world pickups: each player keeps their own copy, so both can pick up the key and open the same door. Turn off to make keys single-pickup like every other item."
+        ).Value;
+
+        ItemsHostAuthoritative = Config.Bind(
+            "Items",
+            "HostAuthoritative",
+            true,
+            "Host-authoritative world items: only the host broadcasts an item's position and visibility, while a client sends just its own actions (pickup, drop, break, drag) as requests. This stops the two machines from fighting over the same object (no more last-writer-wins). Turn off to go back to the old peer-to-peer item sync."
         ).Value;
 
         AiEnabled = Config.Bind(
