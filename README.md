@@ -29,12 +29,34 @@ toggle: player movement, weapons, AI, doors, terminals, inventory, dialogue,
 quests, physics and scene loading all have to be synchronized. The plan is a
 host-authoritative model with a thin client-side presentation layer.
 
+## Install (players, one-click)
+
+You do not need to build anything or touch a command line.
+
+1. Download `PeripeteiaCoop-<version>.zip` from the releases page and extract
+   it anywhere (not into the game folder).
+2. Double-click **`Install.bat`**.
+3. Choose the language. The installer finds Peripeteia by itself (Steam
+   libraries, including extra drives, and common paths) and only asks for the
+   folder if it cannot.
+4. It installs BepInEx 6 (IL2CPP win-x64) at the exact tested version if it is
+   missing, verifies it by SHA256, copies the mod and opens `COOP-README.html`
+   with the next steps.
+5. Launch the game, click **COOP** in the main menu, then **Host game** or pick
+   a host from the list.
+
+The installer needs internet once to download BepInEx (~33 MB). For an offline
+install, put a `BepInEx-Unity.IL2CPP-win-x64-*.zip` next to `Install.bat` and
+it is used instead of downloading.
+
 ## Requirements
 
 - Windows 10/11 x64
 - Legally owned copy of Peripeteia (Steam or itch.io)
-- [.NET 6 SDK](https://dotnet.microsoft.com/download/dotnet/6.0) or newer
-- BepInEx 6 (IL2CPP, x64) installed into the game folder
+- [.NET 6 SDK](https://dotnet.microsoft.com/download/dotnet/6.0) or newer (only
+  needed to build from source)
+- BepInEx 6 (IL2CPP, x64) installed into the game folder (the one-click
+  installer sets this up for you)
 
 > BepInEx 5 does **not** support IL2CPP. Use BepInEx 6 bleeding edge:
 > `BepInEx-Unity.IL2CPP-win-x64-*.zip` from <https://builds.bepinex.dev/projects/bepinex_be>
@@ -44,7 +66,7 @@ The current prototype was tested against **Peripeteia: Metanoia**, build
 `6.0.0-be.793+dbc82f0`. Game updates can invalidate the generated interop
 assemblies and break the mod; pin the game version when testing or publishing.
 
-## Setup
+## Build from source (developers)
 
 1. Install BepInEx 6 into the game folder.
 2. Launch the game once. BepInEx generates the `BepInEx/interop` assemblies.
@@ -122,6 +144,25 @@ disable this with the `Combat.*` config keys. A small overlay shows the
 connection state; disable it with `Ui.ShowStatus = false` in the BepInEx config.
 See [docs/SOLO_TESTING.md](docs/SOLO_TESTING.md) for details, or the Russian
 step-by-step guide below.
+
+## Установка в один клик
+
+Собирать ничего не нужно, командная строка тоже не нужна.
+
+1. Скачай `PeripeteiaCoop-<версия>.zip` из релизов и распакуй в любую папку
+   (не в папку игры).
+2. Дважды кликни **`Install.bat`**.
+3. Выбери язык. Установщик сам находит Peripeteia (библиотеки Steam, включая
+   другие диски, и типовые пути); если не нашёл — попросит указать папку.
+4. Если BepInEx 6 (IL2CPP win-x64) ещё не установлен, установщик скачает именно
+   протестированную версию, проверит её по SHA256, скопирует мод и откроет
+   `COOP-README.html` со следующими шагами.
+5. Запусти игру, в главном меню нажми **COOP**, затем **Host game** или выбери
+   хост из списка.
+
+Интернет нужен один раз — чтобы скачать BepInEx (~33 МБ). Для установки офлайн
+положи рядом с `Install.bat` файл `BepInEx-Unity.IL2CPP-win-x64-*.zip`, и он
+будет использован вместо скачивания.
 
 ## Пошаговый гайд: проверить кооп в игре
 
@@ -515,10 +556,13 @@ with BepInEx. The build references them from `BepInEx/interop`.
 .\scripts\package.ps1
 ```
 
-This builds `artifacts/PeripeteiaCoop-<version>.zip` with only the two plugin
-DLLs, a default `peripeteia.coop.cfg`, install notes and user docs. The
-GitHub/publishing checklist (personal data scan, version pinning, release steps)
-is in [docs/PUBLISHING.md](docs/PUBLISHING.md).
+This builds `artifacts/PeripeteiaCoop-<version>.zip`. The archive contains the two
+plugin DLLs, a default `peripeteia.coop.cfg`, the one-click installer
+(`Install.bat`, `install.ps1`, `COOP-README.html`), install notes and user docs.
+On first run the installer downloads a pinned BepInEx 6 build (verified by
+SHA256) unless BepInEx is already installed. The GitHub/publishing checklist
+(personal data scan, version pinning, release steps) is in
+[docs/PUBLISHING.md](docs/PUBLISHING.md).
 
 ## Legal
 

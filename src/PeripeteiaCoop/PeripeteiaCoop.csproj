@@ -4,7 +4,7 @@
     <TargetFramework>net6.0</TargetFramework>
     <AssemblyName>PeripeteiaCoop</AssemblyName>
     <RootNamespace>PeripeteiaCoop</RootNamespace>
-    <Version>0.7.16</Version>
+    <Version>0.7.17</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>

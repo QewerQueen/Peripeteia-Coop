@@ -86,7 +86,7 @@ git grep -n -I -E "[A-Z]:\\\\Users|[A-Z]:\\\\SteamLibrary|AppData|<your-user-nam
 | Unity | `2021.3.11f1`, IL2CPP x64 |
 | BepInEx | `6.0.0-be.793+dbc82f0` (bleeding edge, IL2CPP) |
 | LiteNetLib | `1.3.5` |
-| Мод | `0.7.12` |
+| Мод | `0.7.17` |
 | Протокол | `20` |
 
 Правила:
@@ -114,6 +114,9 @@ artifacts/PeripeteiaCoop-<version>.zip
 Внутри только:
 
 ```
+Install.bat
+install.ps1
+COOP-README.html
 BepInEx/plugins/PeripeteiaCoop/PeripeteiaCoop.dll
 BepInEx/plugins/PeripeteiaCoop/LiteNetLib.dll
 BepInEx/config/peripeteia.coop.cfg
@@ -123,6 +126,14 @@ LICENSE
 THIRD_PARTY_NOTICES.txt
 docs/*.md
 ```
+
+Пользователь распаковывает архив и дважды кликает `Install.bat`. Установщик
+находит игру, ставит BepInEx 6 (зафиксированную версию) при необходимости,
+копирует мод и открывает `COOP-README.html` со следующими шагами.
+
+Важно: `scripts/install.ps1` должен храниться в кодировке **UTF-8 с BOM**.
+PowerShell 5.1 читает файл без BOM как ANSI, из-за чего русский текст ломается
+и скрипт не парсится. Если правишь файл — проверь, что BOM на месте.
 
 `artifacts/` не коммитится. ZIP прикладывается к GitHub Release.
 
@@ -163,7 +174,9 @@ docs/*.md
 
 - Код мода — MIT (`LICENSE`).
 - LiteNetLib — MIT, укажи в `THIRD_PARTY_NOTICES.txt`.
-- BepInEx не входит в архив; пользователь ставит его сам.
+- BepInEx не входит в архив. `Install.bat` скачивает зафиксированную версию
+  (`6.0.0-be.793+dbc82f0`) с <https://builds.bepinex.dev> и проверяет её по
+  SHA256 перед установкой. BepInEx распространяется под LGPL-2.1.
 - Не выкладывай ассеты, модели, звуки, `GameAssembly.dll`,
   `Assembly-CSharp.dll`, interop-сборки и дампы.
 - Проект неофициальный и не связан с Ninth Exodus.

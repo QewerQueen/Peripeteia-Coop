@@ -4,6 +4,9 @@
 
 .DESCRIPTION
     The archive is written to artifacts/ (git-ignored) and contains:
+      Install.bat
+      install.ps1
+      COOP-README.html
       BepInEx/plugins/PeripeteiaCoop/PeripeteiaCoop.dll
       BepInEx/plugins/PeripeteiaCoop/LiteNetLib.dll
       BepInEx/config/peripeteia.coop.cfg
@@ -12,6 +15,10 @@
       LICENSE
       THIRD_PARTY_NOTICES.txt
       docs/*.md
+
+    The user extracts the archive and double-clicks Install.bat. That installer
+    finds the game, installs BepInEx 6 (pinned version, downloaded and verified)
+    if needed, copies the mod and opens COOP-README.html with the next steps.
 
     It never includes game files, interop assemblies, logs, saves, dumps or
     local paths. Build first with scripts/setup.ps1 and scripts/build.ps1.
@@ -69,24 +76,39 @@ Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root "LICENSE") -Destination $stage
 Copy-Item -Path (Join-Path $root "docs\*.md") -Destination $docsStage
 
+# One-click installer and the post-install guide live at the archive root so
+# the user can just double-click Install.bat after extracting.
+foreach ($file in @("Install.bat", "install.ps1", "COOP-README.html")) {
+    $source = Join-Path $root "scripts\$file"
+    if (-not (Test-Path -LiteralPath $source)) {
+        throw "Missing installer file: $source"
+    }
+    Copy-Item -LiteralPath $source -Destination $stage
+}
+
 $install = @"
 Peripeteia Coop $version (experimental)
 
 REQUIREMENTS
   - Windows 10/11 x64
   - A legally owned copy of Peripeteia (Unity 2021.3.11f1, IL2CPP, x64)
-  - BepInEx 6 bleeding edge (IL2CPP win-x64), not BepInEx 5
   - Both players must use the same game version and the same mod version
+  - Internet for the first install (the installer downloads BepInEx once).
+    Offline: put a BepInEx-Unity.IL2CPP-win-x64-*.zip next to Install.bat.
 
-INSTALL
-  1. Install BepInEx 6 into the game folder.
-  2. Launch the game once, wait for "Chainloader startup complete", close it.
-  3. Copy BepInEx\plugins\PeripeteiaCoop into the game's BepInEx\plugins\
-     directory. Copy BepInEx\config\peripeteia.coop.cfg into BepInEx\config\
-     (or keep your existing config; it is generated on first launch).
-  4. Host:    Peripeteia.exe -coop-host -coop-port 7777 -coop-name Host
-     Client:  Peripeteia.exe -coop-connect <host-ip> -coop-port 7777 -coop-name Friend
-  5. Start the same level or save in both windows.
+QUICK INSTALL (recommended)
+  1. Extract this archive anywhere (not into the game folder).
+  2. Double-click Install.bat.
+  3. Pick the language and let it find the game (or choose the folder).
+  4. When it finishes, COOP-README.html opens with the next steps.
+  5. Launch Peripeteia, open the COOP menu and host/join. No command line.
+
+MANUAL INSTALL (if you prefer)
+  1. Install BepInEx 6 (IL2CPP win-x64) into the game folder.
+  2. Copy BepInEx\plugins\PeripeteiaCoop and BepInEx\config\peripeteia.coop.cfg
+     into the game's BepInEx\ folder (or keep your existing config).
+  3. Launch the game once so BepInEx generates the interop assemblies.
+  4. In the main menu click COOP, then Host game or pick a host from the list.
 
 WHAT WORKS
   - Full cloned player model with the game's animations, Q/E lean and a
@@ -107,13 +129,12 @@ WHAT WORKS
   - ESC menu opens without pausing the world; focus loss does not open it.
 
 NOTES
-  - A co-op client cannot write saves (Client.BlockSaves=true by default).
+  - Inventory, money, health and ammo are personal per player. A co-op client
+    keeps its own copy of the host save as 'Coop - <name>' and can play alone.
   - Internet play needs UDP port 7777 forwarded, or a VPN mesh such as
     ZeroTier/Tailscale. The game has no Steam P2P networking.
-  - Inventory contents, equipment ownership, ammo, money and scene transitions
-    are personal per player and are not synchronized yet. Both players must
-    enter the same level. This is an early prototype, not a complete co-op
-    campaign.
+  - Level transitions are kept in step; both players should still start from the
+    same save. This is an early prototype, not a complete co-op campaign.
   - Both players need the same game version and mod version. Pin the game
     version because updates can break the IL2CPP interop.
 
@@ -129,7 +150,11 @@ LiteNetLib 1.3.5
   MIT License
   https://github.com/RevenantX/LiteNetLib
 
-BepInEx is not bundled with this mod. Install it separately.
+BepInEx 6 (IL2CPP) is not bundled with this mod. Install.bat downloads a
+pinned, tested build from https://builds.bepinex.dev and verifies it with
+SHA256 before installing it. BepInEx is licensed under LGPL-2.1:
+  https://github.com/BepInEx/BepInEx/blob/master/LICENSE
+
 Peripeteia and its assets belong to their respective owners.
 "@
 Set-Content -LiteralPath (Join-Path $stage "THIRD_PARTY_NOTICES.txt") -Value $notices -Encoding UTF8
