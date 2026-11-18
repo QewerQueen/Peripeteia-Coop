@@ -530,6 +530,14 @@ internal static class ItemSync
     }
 
     /// <summary>
+    /// True while a remote effect is being replayed on this machine. Other
+    /// systems that react to the game handing something to the player (the
+    /// GiftGiver patches, for example) use this to avoid echoing a replayed
+    /// effect back to the machine it came from.
+    /// </summary>
+    public static bool IsRemoteApply => _remoteApplyDepth > 0;
+
+    /// <summary>
     /// Announces an immediate pickup so the other side hides the item without
     /// waiting for the next poll.
     /// </summary>

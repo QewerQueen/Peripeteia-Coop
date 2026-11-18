@@ -219,16 +219,20 @@ cd C:\Path\To\PeripeteiaCoop
   последствия квестового объекта (что включилось/выключилось) повторяются у
   второго игрока, так что открытые двери и появившиеся объекты видны обоим.
   Стартовое оружие и экипировку получают оба игрока как **один и тот же набор**
-  (`Story.ShareItemRewards`): повторяются только те выдачи, которыми игра сама
-  вручает предметы (`GiftGiver`), а мировые предметы не дублируются — поэтому
-  клиент больше не получает второй Макаров. Награду, которую квестовый объект
+  (`Story.ShareItemRewards`): выдача предметов игрой (`GiftGiver`) раздаётся прямо
+  в источнике, поэтому оба получают один и тот же стартовый набор — оружие,
+  магазины и имплант «термооптик» из вступления. Мировые предметы при этом не
+  дублируются. Награду, которую квестовый объект
   выдаёт через `ItemInfo.pickupitem`, тоже получают оба
   (`Story.ShareQuestRewards`, включено по умолчанию), поэтому награды после
   квестов у игроков совпадают. Катсцены (видео) видит вся команда
   (`Story.SyncCutscenes`). Настраивается секцией `Story.*` в конфиге BepInEx.
 - **Смерть не откатывает мир**: умерший встаёт на точке последнего сохранения
   (или на входе в уровень), а двери, NPC и квестовое состояние остаются как были
-  — уровень не перезагружается. Управляется `Player.RespawnOnDeath`. Тело
+  — уровень не перезагружается. Управляется `Player.RespawnOnDeath`. Оживший
+  видит напарника целиком: тело напарника не пересобирается из только что
+  возрождённого локального тела (оно в этот момент ещё не полностью
+  инициализировано). Тело
   убитого напарника падает как ragdoll и **не обыскивается**. Сознательный
   откат к другому сохранению — решение хоста: хост грузит сейв и **тянет клиента
   за собой** (тот грузит тот же сейв). Клиент не может откатить мир в одиночку
@@ -385,8 +389,9 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   dialogue also only starts for the player actually standing at the NPC. Quest
   items and rewards therefore stay on the player who triggered them, except the
   starting weapons and equipment, which both players receive as the same set
-  (`Story.ShareItemRewards`): only the game's own gift listeners are replayed,
-  never world pickups, so the teammate cannot end up with a duplicate weapon. The
+  (`Story.ShareItemRewards`): the game's own item grants (`GiftGiver`) are shared
+  at their source, so both players get the same kit — weapons, magazines and the
+  intro Thermoptic Camo implant. World pickups are not duplicated. The
   quest-log effects of a dialogue branch are shared too
   (`Story.SyncDialogueActions`), the world-effect listeners a quest object drives
   (doors, pistons, elevators, GameObject toggles) are replayed on the other
@@ -402,7 +407,9 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   body simply stops animating. A dead teammate cannot be searched or looted.
 - Dying no longer reloads the level (`Player.RespawnOnDeath`): the player stands
   back up at the last save point (or where they entered the level) and the shared
-  world keeps its doors, NPCs and quest state. A deliberate rollback to another
+  world keeps its doors, NPCs and quest state. The revived player still sees the
+  teammate whole: the teammate's body is not rebuilt from the just-revived local
+  body, which is not fully initialised at that moment. A deliberate rollback to another
   save is a host decision: the host loads the save and the client is told to load
   the same one, so both worlds rewind together (`SaveLoadSync`). A client cannot
   load a save mid-level on its own (`Client.BlockRollback`) because that would

@@ -24,13 +24,12 @@ internal sealed class RemoteAvatar
     private Transform? _source;
     private string _sourceScene = string.Empty;
 
-    // Root child names the last cloned local body had. A respawn rebuilds the
-    // local player from PlayerPrefab, and that fresh body can still be missing a
-    // part (the ragdoll/skeleton root) at the moment the clone is taken. Cloning
-    // it then produced a remote puppet with limbs missing, so a same-scene
-    // rebuild now waits for a body that still carries everything the old one did.
+    // Root child names the last cloned local body had. A respawn replaces the
+    // local player with a fresh instance of the same prefab, and that body can
+    // still be missing a part at the moment the clone would be taken. Cloning it
+    // produced a remote puppet with limbs missing, so a same-scene body swap now
+    // keeps the existing clone unless the set of parts really changed.
     private string[]? _sourceRootChildren;
-    private bool _sourceIncompleteLogged;
 
     private float _nextRefreshTime;
     private Animator? _gameAnimator;
@@ -353,15 +352,21 @@ internal sealed class RemoteAvatar
             return;
         }
 
-        // A same-scene body swap is the local player's respawn: the game rebuilds
-        // the player from PlayerPrefab, and for a moment that new body can be
-        // missing a part the old one had. Cloning it then made the teammate's
-        // puppet lose limbs, so keep the clone we already have until the new body
-        // is whole again. A real scene change always rebuilds.
+        // A same-scene body swap is the local player's respawn: the game replaces
+        // the player with a fresh instance of the same prefab, and that body can
+        // be missing a part while it initialises. Cloning it then made the
+        // teammate's puppet lose limbs, so keep the clone we already have (it was
+        // built from a whole body) and just re-point it at the new one. A real
+        // scene change, or a body whose set of parts actually changed, rebuilds.
         if (!_usingFallback && !sceneChanged && sourceChanged && _source != null &&
-            !SourceMatchesClone(source))
+            !HasUnseenRootChildren(source))
         {
-            LogIncompleteSource(source);
+            _nextRefreshTime = Time.unscaledTime + 1.0f;
+            _source = source;
+            _sourceScene = sceneName;
+            CoopPlugin.LogSource.LogInfo(
+                $"[avatar] keeping avatar id={Id}: the local body was swapped in place."
+            );
             return;
         }
 
@@ -382,7 +387,6 @@ internal sealed class RemoteAvatar
             _source = source;
             _sourceScene = sceneName;
             _sourceRootChildren = RootChildNames(source);
-            _sourceIncompleteLogged = false;
 
             // The old weapon visual was a child of the old root and has just
             // been destroyed with it. Recreate it from the last state packet.
@@ -443,56 +447,45 @@ internal sealed class RemoteAvatar
     }
 
     /// <summary>
-    /// True when the current local body still carries every root child the body
-    /// we cloned from had. A freshly revived body can briefly be missing one, and
-    /// cloning that produced a puppet with limbs missing.
+    /// True when the current local body has a direct child the body we cloned
+    /// from did not have, i.e. it really is a different model rather than a
+    /// fresh instance of the same one. A body that is merely missing a child is
+    /// still the same model mid-initialisation and must not force a rebuild.
     /// </summary>
-    private bool SourceMatchesClone(Transform source)
+    private bool HasUnseenRootChildren(Transform source)
     {
         string[]? names = _sourceRootChildren;
         if (names == null || names.Length == 0)
         {
-            return true;
+            return false;
         }
 
-        for (int i = 0; i < names.Length; i++)
+        int count = source.childCount;
+        for (int i = 0; i < count; i++)
         {
-            string name = names[i];
-            if (name.Length > 0 && source.Find(name) == null)
+            Transform child = source.GetChild(i);
+            if (child == null)
             {
-                return false;
+                continue;
             }
-        }
 
-        return true;
-    }
-
-    private void LogIncompleteSource(Transform source)
-    {
-        if (_sourceIncompleteLogged)
-        {
-            return;
-        }
-
-        _sourceIncompleteLogged = true;
-
-        List<string> missing = new();
-        string[]? names = _sourceRootChildren;
-        if (names != null)
-        {
-            for (int i = 0; i < names.Length; i++)
+            bool known = false;
+            for (int j = 0; j < names.Length; j++)
             {
-                if (names[i].Length > 0 && source.Find(names[i]) == null)
+                if (string.Equals(names[j], child.name, StringComparison.Ordinal))
                 {
-                    missing.Add(names[i]);
+                    known = true;
+                    break;
                 }
             }
+
+            if (!known)
+            {
+                return true;
+            }
         }
 
-        CoopPlugin.LogSource.LogInfo(
-            $"[avatar] keeping avatar id={Id}: the new local body is still missing " +
-            $"'{string.Join(", ", missing)}' (roots {names?.Length ?? 0} -> {source.childCount})."
-        );
+        return false;
     }
 
     public void TryUpgrade(Transform? source)

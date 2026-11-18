@@ -535,6 +535,14 @@ internal static class StorySync
             return;
         }
 
+        // Gifts are shared where they happen (see OnGiftGiven and the GiftGiver
+        // patches), not through the VIDE action stream, so a gift node must not be
+        // sent from here as well or the teammate would receive the kit twice.
+        if (IsSharedDialogueGiftMethod(method))
+        {
+            return;
+        }
+
         if (!IsSharedDialogueMethod(method))
         {
             return;
@@ -561,6 +569,77 @@ internal static class StorySync
             Vector3.zero,
             method,
             param,
+            Array.Empty<string>(),
+            Array.Empty<bool>()
+        );
+    }
+
+    /// <summary>
+    /// Called when a GiftGiver hands the local player a kit. In Peripeteia every
+    /// starting weapon and piece of equipment (the intro Thermoptic Camo, the
+    /// tutorial Makarov and its magazines, ...) is granted this way, either by a
+    /// dialogue node or by a quest object. The VIDE action stream that drives the
+    /// dialogue gifts is not replayed, so the gift is shared here, at its source:
+    /// the other machine runs the same GiftGiver it already loaded, which is what
+    /// makes both players end up with the same set.
+    ///
+    /// Suppressed while a remote effect is being replayed, so a shared gift is
+    /// never echoed back to the machine it came from.
+    /// </summary>
+    public static void OnGiftGiven(GiftGiver? giver, string method, int index)
+    {
+        if (!Enabled ||
+            !CoopPlugin.StoryShareItemRewards ||
+            _suppressBroadcast ||
+            ItemSync.IsRemoteApply ||
+            giver == null)
+        {
+            return;
+        }
+
+        GameObject? go = null;
+        try
+        {
+            go = giver.gameObject;
+        }
+        catch (Exception)
+        {
+            go = null;
+        }
+
+        if (go == null)
+        {
+            return;
+        }
+
+        // The full hierarchy key is stable across machines because both load the
+        // same scene; the receiving side looks it up in its own object registry.
+        string key = KeyOf(go.transform);
+        if (string.IsNullOrEmpty(key))
+        {
+            return;
+        }
+
+        // A single dialogue node can hand out several gifts; each one is its own
+        // event, but a repeated identical node in the same instant is sent once.
+        string signature = key + "." + method + "(" + index + ")";
+        if (string.Equals(signature, _lastActionSignature, StringComparison.Ordinal) &&
+            Time.unscaledTime - _lastActionTime < 1.0f)
+        {
+            return;
+        }
+
+        _lastActionSignature = signature;
+        _lastActionTime = Time.unscaledTime;
+
+        _eventsSent++;
+        CoopPlugin.LogSource.LogInfo($"[story] gift '{signature}' shared with the other player.");
+        CoopPlugin.Network?.SendStoryEvent(
+            key,
+            (byte)StoryKind.DialogueAction,
+            Vector3.zero,
+            method,
+            index,
             Array.Empty<string>(),
             Array.Empty<bool>()
         );
@@ -597,7 +676,16 @@ internal static class StorySync
             return;
         }
 
-        GameObject? target = FindObjectByName(gameObjectName);
+        // The gift patches send the target's full hierarchy key; the older
+        // dialogue actions send a plain GameObject name.
+        GameObject? target = gameObjectName.IndexOf('|') >= 0
+            ? FindObject(gameObjectName)
+            : null;
+        if (target == null)
+        {
+            target = FindObjectByName(gameObjectName);
+        }
+
         if (target == null)
         {
             return;
@@ -936,29 +1024,15 @@ internal static class StorySync
         return WorldEffectTypes.Contains(typeName);
     }
 
-    // Listeners that hand supplies directly to the player. Replaying these is
-    // what gives the teammate the same starting weapons and equipment the first
-    // player received, because in Peripeteia the intro hands the kit out through
-    // a GiftGiver.
+    // Gifts (the starting kit the intro hands out through a GiftGiver) are NOT
+    // replayed from here: they are shared at their source by the GiftGiver
+    // patches (see StorySync.OnGiftGiven), so replaying the quest listener as
+    // well would hand the teammate the same kit twice.
     //
-    // ItemInfo.pickupitem is deliberately NOT replayed: it picks up a shared
-    // world object, and the world object is already shared and hidden/picked up
-    // through ItemSync. Replaying it made the receiver grab the same Makarov a
-    // second time (once from the world copy, once from the gift) and end up with
-    // two pistols instead of the host's set. Gated behind Story.ShareItemRewards
-    // because a gift can still duplicate a unique quest item.
-    private static readonly HashSet<string> ItemRewardTypes = new(StringComparer.Ordinal)
-    {
-        "GiftGiver",
-    };
-
-    /// <summary>
-    /// A quest object hands its reward to the player through
-    /// <c>ItemInfo.pickupitem</c> on a world item (the tutorial Makarov, for
-    /// example). Those pickups are shared through ItemSync as world state only,
-    /// so without a replay the teammate never receives the reward and the two
-    /// inventories drift apart. Gated behind <c>Story.ShareQuestRewards</c>.
-    /// </summary>
+    // ItemInfo.pickupitem is the one quest listener that is still replayed: it
+    // picks up a shared world item (the tutorial Makarov, for example), so the
+    // pickup has to happen on the other machine too or the two inventories drift
+    // apart. Gated behind Story.ShareQuestRewards.
     private static bool IsQuestRewardEffect(string typeName, string method)
     {
         return CoopPlugin.StoryShareQuestRewards &&
@@ -968,14 +1042,6 @@ internal static class StorySync
 
     private static bool IsItemRewardEffect(string typeName, string method)
     {
-        if (CoopPlugin.StoryShareItemRewards &&
-            ItemRewardTypes.Contains(typeName) &&
-            (string.Equals(method, "GiveAllGifts", StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(method, "GiveGiftAtIndex", StringComparison.OrdinalIgnoreCase)))
-        {
-            return true;
-        }
-
         return IsQuestRewardEffect(typeName, method);
     }
 
@@ -1584,5 +1650,23 @@ internal static class StoryDialogueActionV2Patch
     private static void Postfix(VD2 __instance)
     {
         StorySync.OnDialogueActionV2(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(GiftGiver), "GiveAllGifts")]
+internal static class StoryGiftAllPatch
+{
+    private static void Postfix(GiftGiver __instance)
+    {
+        StorySync.OnGiftGiven(__instance, "GiveAllGifts", -1);
+    }
+}
+
+[HarmonyPatch(typeof(GiftGiver), "GiveGiftAtIndex")]
+internal static class StoryGiftAtIndexPatch
+{
+    private static void Postfix(GiftGiver __instance, int __0)
+    {
+        StorySync.OnGiftGiven(__instance, "GiveGiftAtIndex", __0);
     }
 }

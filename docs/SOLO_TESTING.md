@@ -221,7 +221,10 @@ BepInEx/LogOutput.1.log
 [story] applied remote QuestAction '...' (objects=2)
 [story] quest trigger[0].assign -> elevator.selectFloor (mode=3, target='elevator, Assembly-CSharp')
 [story] quest '...': applied world effect 'elevator.selectFloor'.
-[story] quest '...': applied item reward 'GiftGiver.GiveAllGifts'.
+[story] quest '...': applied item reward 'ItemInfo.pickupitem'.
+[story] gift 'tutorial|/makarovpickup[0].GiveAllGifts(-1)' shared with the other player.
+[story] applied remote dialogue item reward 'tutorial|/makarovpickup[0].GiveAllGifts(-1)'.
+[avatar] keeping avatar id=1: the local body was swapped in place.
 [story] cutscene '...' broadcast to the other player.
 [story] dialogue effect '....SetQuestLog(3)' shared with the other player.
 [items] spawned dropped item 'Makarov' for key '...' from template 'Makarov(Clone)'.

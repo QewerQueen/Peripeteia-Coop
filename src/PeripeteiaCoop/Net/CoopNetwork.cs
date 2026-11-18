@@ -61,6 +61,11 @@ internal sealed class CoopNetwork : IDisposable
     // front of the view the body is held.
     private const float DragReach = 3.2f;
 
+    // The distance in front of the view the carried body is held at. Recorded at
+    // the moment the body is grabbed so the carry does not depend on the crosshair
+    // still touching the corpse every frame.
+    private const float DefaultDragHold = 1.8f;
+
     private readonly CoopSettings _settings;
     private readonly EventBasedNetListener _listener;
     private readonly NetManager _net;
@@ -89,6 +94,14 @@ internal sealed class CoopNetwork : IDisposable
     private float _nextAutopilotTime;
     private PlayerMovement? _localPlayer;
     private ObjectHighlight? _localHighlight;
+
+    // The corpse currently being carried. Once a body is grabbed the carry is
+    // latched: it lasts until the interact key is released (or the teammate gets
+    // back up), even if the crosshair slides off the body while it is being
+    // dragged. Without the latch the body was dropped and re-grabbed every other
+    // frame, which looked like the carry instantly letting go.
+    private RemoteAvatar? _corpseDragTarget;
+    private float _corpseDragHold = DefaultDragHold;
     private bool _disposed;
     private bool _reconnectPending;
     private float _nextReconnectTime;
@@ -1109,62 +1122,141 @@ internal sealed class CoopNetwork : IDisposable
     /// Carries a teammate's corpse: look at the body, hold the game's interact
     /// key, and the body follows the aim while its pose is streamed to the other
     /// machine. Releasing the key drops it, and it is pinned again once settled.
+    ///
+    /// The carry is latched on the grab: while the key stays down the body keeps
+    /// following the aim even when the crosshair no longer touches it, so the
+    /// body cannot be dropped and re-grabbed every frame as it is pulled along.
     /// </summary>
     private void UpdateCorpseDrag(PlayerMovement? localPlayer)
     {
-        RemoteAvatar? target = null;
-        Vector3 holdPoint = Vector3.zero;
+        ObjectHighlight? highlight = null;
+        Camera? camera = null;
+        bool holding = false;
 
         if (CoopPlugin.PlayerDragRemoteBody &&
             _settings.Role != CoopRole.Offline &&
             localPlayer != null &&
             _avatars.Count > 0)
         {
-            ObjectHighlight? highlight = LocalHighlight(localPlayer);
-            Camera? camera = Camera.main;
-            if (highlight != null &&
-                highlight.interactBind != null &&
-                highlight.interactBind.down() &&
-                camera != null)
-            {
-                Transform view = camera.transform;
-                if (Physics.Raycast(
-                        view.position,
-                        view.forward,
-                        out RaycastHit hit,
-                        DragReach,
-                        ~0,
-                        QueryTriggerInteraction.Ignore))
-                {
-                    foreach (RemoteAvatar avatar in _avatars.Values)
-                    {
-                        if (avatar.IsRagdollCollider(hit.collider))
-                        {
-                            target = avatar;
-                            break;
-                        }
-                    }
-
-                    if (target != null)
-                    {
-                        holdPoint = view.position +
-                                    view.forward * Mathf.Clamp(hit.distance, 1.0f, DragReach);
-                    }
-                }
-            }
+            highlight = LocalHighlight(localPlayer);
+            camera = Camera.main;
+            holding = highlight != null &&
+                      highlight.interactBind != null &&
+                      highlight.interactBind.down() &&
+                      camera != null;
         }
 
+        if (!holding)
+        {
+            ReleaseCorpseDrag();
+            return;
+        }
+
+        Transform view = camera!.transform;
+
+        // Keep the body we already grabbed as long as it is still down.
+        if (_corpseDragTarget != null &&
+            (!_avatars.ContainsValue(_corpseDragTarget) || !_corpseDragTarget.IsDead))
+        {
+            _corpseDragTarget = null;
+        }
+
+        if (_corpseDragTarget == null)
+        {
+            if (!TryGrabCorpse(view, out RemoteAvatar? grabbed, out float hold))
+            {
+                ReleaseCorpseDrag();
+                return;
+            }
+
+            _corpseDragTarget = grabbed;
+            _corpseDragHold = hold;
+            CoopPlugin.LogSource.LogInfo(
+                $"[death] holding the corpse of remote {grabbed!.Id} at {hold:F2}m."
+            );
+        }
+
+        Vector3 holdPoint = view.position + view.forward * _corpseDragHold;
+        _corpseDragTarget!.BeginCorpseDrag(holdPoint);
+        _corpseDragTarget.DragCorpse(holdPoint);
+    }
+
+    /// <summary>
+    /// Finds the corpse the player is looking at. Every hit along the view ray is
+    /// considered so a collider that is not part of a ragdoll (the local player's
+    /// own body, the clone's capsule) cannot shadow the body behind it.
+    /// </summary>
+    private bool TryGrabCorpse(
+        Transform view,
+        out RemoteAvatar? target,
+        out float hold)
+    {
+        target = null;
+        hold = DefaultDragHold;
+
+        try
+        {
+            RaycastHit[] hits = Physics.RaycastAll(
+                view.position,
+                view.forward,
+                DragReach,
+                ~0,
+                QueryTriggerInteraction.Ignore
+            );
+
+            float best = float.MaxValue;
+            foreach (RaycastHit hit in hits)
+            {
+                if (hit.collider == null)
+                {
+                    continue;
+                }
+
+                foreach (RemoteAvatar avatar in _avatars.Values)
+                {
+                    if (!avatar.IsRagdollCollider(hit.collider))
+                    {
+                        continue;
+                    }
+
+                    if (hit.distance < best)
+                    {
+                        best = hit.distance;
+                        target = avatar;
+                    }
+
+                    break;
+                }
+            }
+
+            if (target != null)
+            {
+                hold = Mathf.Clamp(best, 1.0f, DragReach);
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] corpse grab check failed: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+
+        return target != null;
+    }
+
+    /// <summary>Drops the carried corpse (if any) and lets it settle again.</summary>
+    private void ReleaseCorpseDrag()
+    {
+        if (_corpseDragTarget == null)
+        {
+            return;
+        }
+
+        _corpseDragTarget = null;
         foreach (RemoteAvatar avatar in _avatars.Values)
         {
-            if (avatar == target)
-            {
-                avatar.BeginCorpseDrag(holdPoint);
-                avatar.DragCorpse(holdPoint);
-            }
-            else
-            {
-                avatar.EndCorpseDrag();
-            }
+            avatar.EndCorpseDrag();
         }
     }
 

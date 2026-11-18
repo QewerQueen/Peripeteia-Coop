@@ -286,7 +286,7 @@ public sealed class CoopPlugin : BasePlugin
             "Story",
             "SyncDialogueActions",
             true,
-            "Share the quest-log effects of a dialogue branch (NPCConversation.SetQuestLog / RemoveQuestLog) and, when ShareItemRewards is on, the equipment a branch gifts the player. Other item and reward actions are never replayed."
+            "Share the quest-log effects of a dialogue branch (NPCConversation.SetQuestLog / RemoveQuestLog). Other item and reward actions are never replayed."
         ).Value;
 
         StorySyncQuestEffects = Config.Bind(
@@ -300,7 +300,7 @@ public sealed class CoopPlugin : BasePlugin
             "Story",
             "ShareItemRewards",
             true,
-            "Also replay the listeners that hand the player their equipment (GiftGiver.GiveAllGifts / GiveGiftAtIndex) so both players get the same starting weapons and kit. Turn off if a unique quest item must stay single."
+            "Share the game's item grants (GiftGiver.GiveAllGifts / GiveGiftAtIndex) where they happen, so both players get the same starting weapons, magazines and kit (the intro Thermoptic Camo implant). Turn off if a unique quest item must stay single."
         ).Value;
 
         StoryShareQuestRewards = Config.Bind(
@@ -474,6 +474,8 @@ public sealed class CoopPlugin : BasePlugin
             TryPatch(typeof(StoryCutscenePlayPatch));
             TryPatch(typeof(StoryDialogueActionPatch));
             TryPatch(typeof(StoryDialogueActionV2Patch));
+            TryPatch(typeof(StoryGiftAllPatch));
+            TryPatch(typeof(StoryGiftAtIndexPatch));
             TryPatch(typeof(DisableTimeControllerPausePatch));
             TryPatch(typeof(DisableFocusPausePatch));
             TryPatch(typeof(MainMenuOpenProbePatch));
