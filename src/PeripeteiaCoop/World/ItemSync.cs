@@ -114,6 +114,11 @@ internal static class ItemSync
     private static int _eventsApplied;
     private static bool _applyingRemoteBreak;
 
+    // Bumped while a remote story effect runs (a replayed reward listener). The
+    // pickup such a listener performs is the teammate's own reward, not a world
+    // pickup, so it must not be announced back as a fresh local pickup.
+    private static int _remoteApplyDepth;
+
     public static void Register(ItemInfo? item)
     {
         if (item == null || item.gameObject == null)
@@ -508,12 +513,30 @@ internal static class ItemSync
     }
 
     /// <summary>
+    /// Marks the start of a replayed remote effect. While one is running the
+    /// item events it causes stay local (see <see cref="OnLocalPickup"/>).
+    /// </summary>
+    public static void BeginRemoteApply()
+    {
+        _remoteApplyDepth++;
+    }
+
+    public static void EndRemoteApply()
+    {
+        if (_remoteApplyDepth > 0)
+        {
+            _remoteApplyDepth--;
+        }
+    }
+
+    /// <summary>
     /// Announces an immediate pickup so the other side hides the item without
     /// waiting for the next poll.
     /// </summary>
     public static void OnLocalPickup(ItemInfo? item)
     {
-        if (CoopPlugin.Settings.Role == CoopRole.Offline || item == null || item.gameObject == null)
+        if (_remoteApplyDepth > 0 ||
+            CoopPlugin.Settings.Role == CoopRole.Offline || item == null || item.gameObject == null)
         {
             return;
         }
@@ -553,7 +576,8 @@ internal static class ItemSync
     /// </summary>
     public static void OnLocalDrop(ItemInfo? item)
     {
-        if (CoopPlugin.Settings.Role == CoopRole.Offline || item == null || item.gameObject == null)
+        if (_remoteApplyDepth > 0 ||
+            CoopPlugin.Settings.Role == CoopRole.Offline || item == null || item.gameObject == null)
         {
             return;
         }
@@ -602,6 +626,7 @@ internal static class ItemSync
     public static void OnLocalBreak(Component? source, string kind)
     {
         if (_applyingRemoteBreak ||
+            _remoteApplyDepth > 0 ||
             CoopPlugin.Settings.Role == CoopRole.Offline ||
             source == null)
         {

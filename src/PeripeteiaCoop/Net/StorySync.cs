@@ -667,6 +667,9 @@ internal static class StorySync
         int number
     )
     {
+        // A gift spawns and immediately picks up its item, so keep those pickups
+        // local instead of echoing them back to the giver.
+        ItemSync.BeginRemoteApply();
         try
         {
             _suppressBroadcast = true;
@@ -705,6 +708,7 @@ internal static class StorySync
         finally
         {
             _suppressBroadcast = false;
+            ItemSync.EndRemoteApply();
         }
     }
 
@@ -948,15 +952,31 @@ internal static class StorySync
         "GiftGiver",
     };
 
+    /// <summary>
+    /// A quest object hands its reward to the player through
+    /// <c>ItemInfo.pickupitem</c> on a world item (the tutorial Makarov, for
+    /// example). Those pickups are shared through ItemSync as world state only,
+    /// so without a replay the teammate never receives the reward and the two
+    /// inventories drift apart. Gated behind <c>Story.ShareQuestRewards</c>.
+    /// </summary>
+    private static bool IsQuestRewardEffect(string typeName, string method)
+    {
+        return CoopPlugin.StoryShareQuestRewards &&
+            string.Equals(typeName, "ItemInfo", StringComparison.Ordinal) &&
+            string.Equals(method, "pickupitem", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsItemRewardEffect(string typeName, string method)
     {
-        if (!CoopPlugin.StoryShareItemRewards || !ItemRewardTypes.Contains(typeName))
+        if (CoopPlugin.StoryShareItemRewards &&
+            ItemRewardTypes.Contains(typeName) &&
+            (string.Equals(method, "GiveAllGifts", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(method, "GiveGiftAtIndex", StringComparison.OrdinalIgnoreCase)))
         {
-            return false;
+            return true;
         }
 
-        return string.Equals(method, "GiveAllGifts", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(method, "GiveGiftAtIndex", StringComparison.OrdinalIgnoreCase);
+        return IsQuestRewardEffect(typeName, method);
     }
 
     /// <summary>
@@ -1142,12 +1162,43 @@ internal static class StorySync
                 method,
                 arguments,
                 key,
-                itemReward ? "item reward" : "world effect"
+                itemReward ? "item reward" : "world effect",
+                itemReward
             );
         }
     }
 
     private static void InvokeEffect(
+        UnityEngine.Object target,
+        string typeName,
+        string method,
+        object?[] arguments,
+        string key,
+        string label,
+        bool itemReward
+    )
+    {
+        if (!itemReward)
+        {
+            InvokeEffectCore(target, typeName, method, arguments, key, label);
+            return;
+        }
+
+        // A replayed reward (ItemInfo.pickupitem) runs the game's own pickup on
+        // this machine. It must not echo back to the other machine as a fresh
+        // world pickup, so the item events it causes stay local.
+        ItemSync.BeginRemoteApply();
+        try
+        {
+            InvokeEffectCore(target, typeName, method, arguments, key, label);
+        }
+        finally
+        {
+            ItemSync.EndRemoteApply();
+        }
+    }
+
+    private static void InvokeEffectCore(
         UnityEngine.Object target,
         string typeName,
         string method,

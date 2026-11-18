@@ -76,6 +76,8 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool StoryShareItemRewards { get; private set; } = true;
 
+    internal static bool StoryShareQuestRewards { get; private set; } = true;
+
     internal static bool PlayerSyncDeath { get; private set; } = true;
 
     internal static bool PlayerDeathRagdoll { get; private set; } = true;
@@ -295,6 +297,13 @@ public sealed class CoopPlugin : BasePlugin
             "ShareItemRewards",
             true,
             "Also replay the listeners that hand the player their equipment (GiftGiver.GiveAllGifts / GiveGiftAtIndex) so both players get the same starting weapons and kit. World pickups (ItemInfo.pickupitem) are never replayed - those objects are already shared - so the teammate cannot end up with two of the same weapon. Turn off if a unique quest item must stay single."
+        ).Value;
+
+        StoryShareQuestRewards = Config.Bind(
+            "Story",
+            "ShareQuestRewards",
+            true,
+            "Also replay the item rewards a quest object hands out (ItemInfo.pickupitem), so a quest reward reaches both players and the two inventories match. Replayed rewards do not echo back as world pickups. Turn off if a quest reward must stay with the first player only."
         ).Value;
 
         PlayerSyncDeath = Config.Bind(

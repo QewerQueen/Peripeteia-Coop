@@ -23,6 +23,15 @@ internal sealed class RemoteAvatar
     private float _phase;
     private Transform? _source;
     private string _sourceScene = string.Empty;
+
+    // Root child names the last cloned local body had. A respawn rebuilds the
+    // local player from PlayerPrefab, and that fresh body can still be missing a
+    // part (the ragdoll/skeleton root) at the moment the clone is taken. Cloning
+    // it then produced a remote puppet with limbs missing, so a same-scene
+    // rebuild now waits for a body that still carries everything the old one did.
+    private string[]? _sourceRootChildren;
+    private bool _sourceIncompleteLogged;
+
     private float _nextRefreshTime;
     private Animator? _gameAnimator;
 
@@ -172,6 +181,7 @@ internal sealed class RemoteAvatar
         _usingFallback = !cloned;
         _source = cloned ? source : null;
         _sourceScene = cloned && source != null ? source.gameObject.scene.name : string.Empty;
+        _sourceRootChildren = cloned && source != null ? RootChildNames(source) : null;
         Root.transform.position = position;
         Root.transform.rotation = Quaternion.Euler(0.0f, yaw, 0.0f);
 
@@ -325,6 +335,18 @@ internal sealed class RemoteAvatar
             return;
         }
 
+        // A same-scene body swap is the local player's respawn: the game rebuilds
+        // the player from PlayerPrefab, and for a moment that new body can be
+        // missing a part the old one had. Cloning it then made the teammate's
+        // puppet lose limbs, so keep the clone we already have until the new body
+        // is whole again. A real scene change always rebuilds.
+        if (!_usingFallback && !sceneChanged && sourceChanged && _source != null &&
+            !SourceMatchesClone(source))
+        {
+            LogIncompleteSource(source);
+            return;
+        }
+
         _nextRefreshTime = Time.unscaledTime + 1.0f;
 
         try
@@ -341,6 +363,8 @@ internal sealed class RemoteAvatar
             _usingFallback = false;
             _source = source;
             _sourceScene = sceneName;
+            _sourceRootChildren = RootChildNames(source);
+            _sourceIncompleteLogged = false;
 
             // The old weapon visual was a child of the old root and has just
             // been destroyed with it. Recreate it from the last state packet.
@@ -384,6 +408,73 @@ internal sealed class RemoteAvatar
     {
         return !string.IsNullOrEmpty(sceneName) &&
                sceneName.IndexOf("menu", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    /// <summary>Names of the direct children of the local player root.</summary>
+    private static string[] RootChildNames(Transform source)
+    {
+        int count = source.childCount;
+        string[] names = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            Transform child = source.GetChild(i);
+            names[i] = child != null ? child.name : string.Empty;
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// True when the current local body still carries every root child the body
+    /// we cloned from had. A freshly revived body can briefly be missing one, and
+    /// cloning that produced a puppet with limbs missing.
+    /// </summary>
+    private bool SourceMatchesClone(Transform source)
+    {
+        string[]? names = _sourceRootChildren;
+        if (names == null || names.Length == 0)
+        {
+            return true;
+        }
+
+        for (int i = 0; i < names.Length; i++)
+        {
+            string name = names[i];
+            if (name.Length > 0 && source.Find(name) == null)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void LogIncompleteSource(Transform source)
+    {
+        if (_sourceIncompleteLogged)
+        {
+            return;
+        }
+
+        _sourceIncompleteLogged = true;
+
+        List<string> missing = new();
+        string[]? names = _sourceRootChildren;
+        if (names != null)
+        {
+            for (int i = 0; i < names.Length; i++)
+            {
+                if (names[i].Length > 0 && source.Find(names[i]) == null)
+                {
+                    missing.Add(names[i]);
+                }
+            }
+        }
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[avatar] keeping avatar id={Id}: the new local body is still missing " +
+            $"'{string.Join(", ", missing)}' (roots {names?.Length ?? 0} -> {source.childCount})."
+        );
     }
 
     public void TryUpgrade(Transform? source)
