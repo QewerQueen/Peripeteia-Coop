@@ -35,6 +35,14 @@ namespace PeripeteiaCoop;
 /// </summary>
 internal static class StorySync
 {
+    /// <summary>
+    /// How close the local player has to be to an NPC to own the conversation it
+    /// starts. A dialogue is raised by the local interaction ray, so the player is
+    /// normally right next to the NPC; anything further away was caused by a
+    /// remote avatar and must not consume the branch here.
+    /// </summary>
+    private const float DialogueReach = 8.0f;
+
     private static readonly HashSet<string> Consumed = new();
     private static readonly Dictionary<string, GameObject> ObjectsByKey = new();
 
@@ -50,6 +58,7 @@ internal static class StorySync
     private static float _lastCutsceneProbe;
     private static string _lastActionSignature = string.Empty;
     private static float _lastActionTime;
+    private static string _blockedDialogueKey = string.Empty;
 
     public static bool Enabled => CoopPlugin.Settings.Role != CoopRole.Offline && CoopPlugin.StoryEnabled;
 
@@ -76,6 +85,8 @@ internal static class StorySync
 
     public static bool BlockDialogue(NPCConversation conversation)
     {
+        _blockedDialogueKey = string.Empty;
+
         if (!Enabled || !CoopPlugin.StoryLockDialogues || conversation == null)
         {
             return false;
@@ -90,14 +101,15 @@ internal static class StorySync
             return true;
         }
 
-        // The host registers the remote avatar as an AI target, so its friendly
-        // NPCs would start talking for the client and consume the branch before
-        // the client ever reaches the NPC. Only the player actually standing at
-        // the NPC may start the conversation.
-        if (!LocalPlayerIsNearest(conversation.transform))
+        // The host registers the remote avatar as an AI target, so a friendly NPC
+        // can react to the client before the client reaches it. A dialogue the
+        // local player did not walk up to must not start (and consume the branch)
+        // here; only the player actually standing at the NPC may start it.
+        if (!LocalPlayerIsAt(conversation.transform))
         {
+            _blockedDialogueKey = key;
             CoopPlugin.LogSource.LogInfo(
-                $"[story] dialogue '{key}' triggered for the other player; ignoring."
+                $"[story] dialogue '{key}' started away from the local player; ignoring."
             );
             return true;
         }
@@ -106,11 +118,11 @@ internal static class StorySync
     }
 
     /// <summary>
-    /// True when the local player is at least as close to the NPC as any remote
-    /// player. Used to keep a remote avatar from starting a conversation that
-    /// belongs to whoever walked up to the NPC.
+    /// True when the local player is close enough to the NPC to be the one who
+    /// started the conversation. Used to keep a remote avatar from starting a
+    /// conversation that belongs to whoever walked up to the NPC.
     /// </summary>
-    private static bool LocalPlayerIsNearest(Transform npc)
+    private static bool LocalPlayerIsAt(Transform npc)
     {
         Transform? local = _localPlayer != null ? _localPlayer.transform : null;
         if (local == null)
@@ -118,37 +130,17 @@ internal static class StorySync
             return true;
         }
 
-        CoopNetwork? network = CoopPlugin.Network;
-        if (network == null)
+        float distance = Vector3.Distance(local.position, npc.position);
+        if (distance <= DialogueReach)
         {
             return true;
         }
 
-        float localDistance = Vector3.Distance(local.position, npc.position);
-        float nearestRemote = float.MaxValue;
-
-        foreach (int id in network.RemotePlayerIds())
-        {
-            Transform? root = network.GetAvatarRoot(id);
-            if (root == null)
-            {
-                continue;
-            }
-
-            float distance = Vector3.Distance(root.position, npc.position);
-            if (distance < nearestRemote)
-            {
-                nearestRemote = distance;
-            }
-        }
-
-        if (nearestRemote == float.MaxValue)
-        {
-            return true;
-        }
-
-        // Half a metre of slack so a tie still resolves to the local player.
-        return localDistance <= nearestRemote + 0.5f;
+        CoopPlugin.LogSource.LogInfo(
+            $"[story] local player is {distance:0.0} m from the NPC " +
+            $"(limit {DialogueReach:0.0} m)."
+        );
+        return false;
     }
 
     public static void OnDialogueStarted(NPCConversation conversation)
@@ -159,6 +151,16 @@ internal static class StorySync
         }
 
         string key = KeyOf(conversation.transform);
+
+        // A prefix that returns false skips the original method, but its postfix
+        // still runs. Do not consume a conversation this machine just refused.
+        if (!string.IsNullOrEmpty(_blockedDialogueKey) &&
+            string.Equals(key, _blockedDialogueKey, StringComparison.Ordinal))
+        {
+            _blockedDialogueKey = string.Empty;
+            return;
+        }
+
         if (!Consumed.Add(key))
         {
             return;
@@ -1373,6 +1375,27 @@ internal static class StorySync
 
             keys.Add(KeyOf(go.transform));
             states.Add(active);
+        }
+    }
+
+    /// <summary>
+    /// Drops the one-time story locks. Called when a save is loaded: the save
+    /// restores the game's own story progress, so the local mirror of what has
+    /// already been consumed must be rebuilt from the loaded world instead of
+    /// blocking it (otherwise a reload would leave every door and dialogue locked
+    /// forever).
+    /// </summary>
+    public static void ResetLocks(string reason)
+    {
+        int consumed = Consumed.Count;
+        Consumed.Clear();
+        ObjectsByKey.Clear();
+
+        if (consumed > 0)
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[story] cleared {consumed} story lock(s) after {reason}."
+            );
         }
     }
 

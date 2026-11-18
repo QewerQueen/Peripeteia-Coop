@@ -37,6 +37,13 @@ internal static class DeathRespawn
         CoopPlugin.Settings.Role != CoopRole.Offline && CoopPlugin.PlayerRespawnOnDeath;
 
     /// <summary>
+    /// True while the death prefix is rebuilding the local player in place. A
+    /// load fired from that path is the game's internal "come back from a load"
+    /// bookkeeping, not a real rollback, so it must not be shared.
+    /// </summary>
+    public static bool IsRespawning => _respawning;
+
+    /// <summary>
     /// Called when a save is loaded (by either machine) so the respawn point is
     /// re-read from wherever the loaded save puts the player.
     /// </summary>
@@ -272,7 +279,15 @@ internal static class DeathRespawnPatch
 {
     private static bool Prefix()
     {
-        return DeathRespawn.TryRespawn();
+        bool runOriginal = DeathRespawn.TryRespawn();
+        if (runOriginal)
+        {
+            // The game is reloading the save after all, so the world (and its
+            // story progress) is rebuilt; the one-time locks have to follow.
+            StorySync.ResetLocks("a death load");
+        }
+
+        return runOriginal;
     }
 }
 

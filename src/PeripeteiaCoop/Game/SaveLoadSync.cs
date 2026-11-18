@@ -121,6 +121,13 @@ internal static class SaveLoadProcedurePatch
         bool fromDEAD
     )
     {
+        if (DeathRespawn.IsRespawning)
+        {
+            // The death respawn calls the game's own "come back from a load"
+            // bookkeeping; that is not a rollback of the shared world.
+            return true;
+        }
+
         if (CoopPlugin.Settings.Role == CoopRole.Host)
         {
             if (!enteringScene && !fromDEAD && !__instance.onMainMenuScene)
@@ -129,8 +136,10 @@ internal static class SaveLoadProcedurePatch
             }
 
             // A load moves the player; the respawn point has to be re-read from
-            // wherever the loaded save puts them.
+            // wherever the loaded save puts them, and the story locks have to be
+            // rebuilt from the loaded world.
             DeathRespawn.OnLoad();
+            StorySync.ResetLocks("the host loaded a save");
             return true;
         }
 
@@ -141,6 +150,7 @@ internal static class SaveLoadProcedurePatch
             SaveLoadSync.IsApplyingRemoteLoad)
         {
             DeathRespawn.OnLoad();
+            StorySync.ResetLocks("a save was loaded");
             return true;
         }
 

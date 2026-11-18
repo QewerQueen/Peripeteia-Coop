@@ -195,6 +195,9 @@ BepInEx/LogOutput.1.log
 [sync] enemies mirrored=... deaths=.../... story=.../... storyEffects=... playerDeaths=.../... saveLoads=.../...
 [ai] remote player 1 registered as a target on '...'
 [story] dialogue consumed: '...'
+[story] dialogue '...' started away from the local player; ignoring.
+[story] local player is 14.2 m from the NPC (limit 8.0 m).
+[story] cleared 3 story lock(s) after a save was loaded.
 [story] applied remote QuestAction '...' (objects=2)
 [story] quest trigger[0].assign -> elevator.selectFloor (mode=3, target='elevator, Assembly-CSharp')
 [story] quest '...': applied world effect 'elevator.selectFloor'.
@@ -265,6 +268,11 @@ Enabled = true
 перехватывается и игрок встаёт на точке последнего сохранения, а мир остаётся
 как был (`Player.RespawnOnDeath`). Точка сохранения пишется при сохранении,
 автосейве и на входе в уровень — в логе `[death] save point (...)`.
+
+Загрузка сейва сбрасывает «замки» сюжета (какие диалоги и квестовые объекты
+уже израсходованы): состояние восстанавливается из самого сейва, иначе после
+отката кнопка двери или разговор остались бы заблокированными навсегда — в
+логе `[story] cleared N story lock(s) after ...`.
 
 Если нужно разрешить клиенту сохраняться (например, для отладки), задай:
 
