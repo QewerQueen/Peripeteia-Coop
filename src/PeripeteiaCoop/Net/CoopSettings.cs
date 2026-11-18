@@ -72,6 +72,14 @@ internal sealed class CoopSettings
     public bool StoryScan { get; private set; }
 
     /// <summary>
+    /// Debug-only solo test mode: force one game save once in a level, so a
+    /// retest can prove that a co-op client is allowed to write its own
+    /// 'Coop - &lt;name&gt;' save (and thus keep its personal inventory). Never
+    /// enabled unless -coop-save-test is passed.
+    /// </summary>
+    public bool SaveTest { get; private set; }
+
+    /// <summary>
     /// Debug-only solo test mode: the name of a key/quest item to pick up once in
     /// a level, so a retest can prove that a key picked up by one player stays in
     /// the other player's world instead of vanishing. Never set unless
@@ -208,6 +216,11 @@ internal sealed class CoopSettings
                 case "-coop-story-scan":
                 case "--coop-story-scan":
                     settings.StoryScan = true;
+                    break;
+
+                case "-coop-save-test":
+                case "--coop-save-test":
+                    settings.SaveTest = true;
                     break;
 
                 case "-coop-key-test":

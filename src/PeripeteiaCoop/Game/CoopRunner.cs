@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace PeripeteiaCoop;
 
@@ -20,6 +21,11 @@ public sealed class CoopRunner : MonoBehaviour
     private float _nextStoryScanTime;
     private bool _keyTestDone;
     private float _nextKeyTestTime;
+    private bool _saveTestDone;
+    private float _nextSaveTestTime;
+    private string _autosaveScene = string.Empty;
+    private float _autosaveAt;
+    private int _personalSaves;
     private float _lastTimeScale = 1.0f;
 
     private void Update()
@@ -44,6 +50,8 @@ public sealed class CoopRunner : MonoBehaviour
         SaveLoadSync.TickAutoStart();
         TryStoryScan();
         TryKeyTest();
+        TrySaveTest();
+        TryClientAutosave();
         CoopPlugin.Tick(_localPlayer);
     }
 
@@ -180,6 +188,124 @@ public sealed class CoopRunner : MonoBehaviour
         {
             CoopPlugin.LogSource.LogWarning(
                 $"[test] key test pickup failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    /// <summary>
+    /// Debug-only (-coop-save-test): force one game save once in a level, so a
+    /// retest can prove that a co-op client may write its own 'Coop - &lt;name&gt;'
+    /// save and therefore keep its personal inventory.
+    /// </summary>
+    private void TrySaveTest()
+    {
+        if (_saveTestDone || !CoopPlugin.Settings.SaveTest)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < _nextSaveTestTime)
+        {
+            return;
+        }
+
+        if (_localPlayer == null || !_localPlayer.isActiveAndEnabled)
+        {
+            return;
+        }
+
+        _nextSaveTestTime = Time.unscaledTime + 5.0f;
+
+        SaveHandler? handler = UnityEngine.Object.FindObjectOfType<SaveHandler>();
+        if (handler == null || handler.onMainMenuScene)
+        {
+            return;
+        }
+
+        _saveTestDone = true;
+        string name = SaveVersionController.currentSaveName ?? string.Empty;
+        CoopPlugin.LogSource.LogInfo($"[test] save test: SaveProcedure(false, '{name}').");
+
+        try
+        {
+            handler.SaveProcedure(false, name);
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[test] save test failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    /// <summary>
+    /// Client side: write this player's own co-op save once a level has streamed
+    /// in, the way the host autosaves on level start. The game does not call its
+    /// own level-start autosave on a client, so without this the client's
+    /// inventory, money and health would never be written and would reset to the
+    /// host's on the next join. The save always lands in the client's own
+    /// 'Coop - &lt;name&gt;' folder, never the host's.
+    /// </summary>
+    private void TryClientAutosave()
+    {
+        if (CoopPlugin.Settings.Role != CoopRole.Client || !CoopPlugin.ClientAutosavePersonalState)
+        {
+            return;
+        }
+
+        if (_localPlayer == null || !_localPlayer.isActiveAndEnabled)
+        {
+            return;
+        }
+
+        string scene = SceneManager.GetActiveScene().name;
+        if (string.IsNullOrEmpty(scene) ||
+            scene.IndexOf("menu", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return;
+        }
+
+        if (!string.Equals(scene, _autosaveScene, StringComparison.Ordinal))
+        {
+            // A new level appeared; let it stream in before saving it.
+            _autosaveScene = scene;
+            _autosaveAt = Time.unscaledTime + 10.0f;
+            return;
+        }
+
+        if (_autosaveAt <= 0.0f || Time.unscaledTime < _autosaveAt)
+        {
+            return;
+        }
+
+        _autosaveAt = 0.0f;
+
+        SaveHandler? handler = UnityEngine.Object.FindObjectOfType<SaveHandler>();
+        if (handler == null || handler.onMainMenuScene)
+        {
+            return;
+        }
+
+        string name = SaveVersionController.currentSaveName ?? string.Empty;
+        if (!SaveTransfer.IsCoopLocalSave(name))
+        {
+            // Not playing from this machine's own co-op save; leave it alone.
+            return;
+        }
+
+        _personalSaves++;
+        CoopPlugin.LogSource.LogInfo(
+            $"[save] client personal autosave #{_personalSaves} for '{name}'."
+        );
+
+        try
+        {
+            handler.SaveProcedure(false, name);
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[save] client personal autosave failed: {exception.GetType().Name}: {exception.Message}"
             );
         }
     }

@@ -102,11 +102,15 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool BlockClientRollback { get; private set; } = true;
 
+    internal static bool ClientAutosavePersonalState { get; private set; } = true;
+
     internal static bool AdvertiseEnabled { get; private set; } = true;
 
     internal static bool AutoDownloadSave { get; private set; } = true;
 
     internal static bool AutoStartDownloadedSave { get; private set; } = true;
+
+    internal static bool ClientKeepPersonalInventory { get; private set; } = true;
 
     internal static string DefaultPlayerName { get; private set; } = string.Empty;
 
@@ -123,7 +127,9 @@ public sealed class CoopPlugin : BasePlugin
     internal static bool IsCoopActive => Settings.Role != CoopRole.Offline;
 
     internal static bool ShouldBlockClientSaves =>
-        BlockClientSaves && Settings.Role == CoopRole.Client;
+        BlockClientSaves &&
+        Settings.Role == CoopRole.Client &&
+        !SaveTransfer.IsCoopLocalSave(SaveVersionController.currentSaveName);
 
     internal static bool ShouldBlockClientRollback =>
         BlockClientRollback && Settings.Role == CoopRole.Client;
@@ -159,6 +165,20 @@ public sealed class CoopPlugin : BasePlugin
             "BlockSaves",
             true,
             "Prevent a co-op client from writing save files. Loading is unaffected."
+        ).Value;
+
+        ClientAutosavePersonalState = Config.Bind(
+            "Client",
+            "AutosavePersonalState",
+            true,
+            "Client only: when a level starts, write this player's own co-op save ('Coop - <name>'), the way the host autosaves. That is what keeps your inventory, money and health across rejoins even when the game's own autosave is off. Saves still go only to your own co-op save, never the host's."
+        ).Value;
+
+        ClientKeepPersonalInventory = Config.Bind(
+            "Client",
+            "KeepPersonalInventory",
+            true,
+            "Client only: keep this player's own inventory, money and health when the host's save is downloaded again. The host save is stored under a local 'Coop - <name>' folder, and this player's own inventory save (inv.sfile) is left untouched there, so rejoining never resets your kit to the host's. Turn off to always take the host's loadout."
         ).Value;
 
         ShowStatusOverlay = Config.Bind(

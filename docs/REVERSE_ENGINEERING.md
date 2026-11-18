@@ -124,8 +124,11 @@ Player
 - Идентификаторы: хост = 0, клиенты = 1..N.
 - Таймаут соединения увеличен до 20 с: загрузка главного меню двух
   экземпляров иногда занимает больше стандартных 5 с.
-- Клиент не пишет сейвы: Harmony-префиксы на `SaveHandler.RequestSave`,
+- Клиент не пишет чужие сейвы: Harmony-префиксы на `SaveHandler.RequestSave`,
   `ProcessRequestedSave`, `AutosaveOnLevelStart`; настройка `Client.BlockSaves`.
+  Свой сейв `Coop - <имя>` разрешён (`SaveTransfer.IsCoopLocalSave`), а
+  `SaveHandler.SaveProcedure` клиента перенаправляется в него
+  (`ClientSaveRedirectPatch`).
 
 ## Важные выводы для мультиплеера
 

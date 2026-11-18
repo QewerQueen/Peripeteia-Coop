@@ -79,8 +79,9 @@ The script starts two instances: a host (`-coop-host`) and a client
 `local/logs/`, though BepInEx writes the useful log to
 `BepInEx/LogOutput.log` and `BepInEx/LogOutput.1.log`. With `-coop-*` arguments
 the plugin forces `Application.runInBackground`, so the unfocused instance keeps
-running. A co-op client also refuses manual saves, queued saves and level-start
-autosaves, so it cannot overwrite the host's progress. Loading is not affected.
+running. A co-op client saves only into its own `Coop - <name>` copy of the host
+save, so it can never overwrite the host's progress. That own save is what keeps
+the client's inventory, money and health across rejoins.
 
 To make the client move by itself while you watch the host window:
 
@@ -323,9 +324,10 @@ NullReferenceException
 - **Мир не останавливается по ESC** — это сделано специально для кооп-режима:
   меню открывается, но `TimeController.Pause` не срабатывает, чтобы неактивное
   окно не замирало. Обычный запуск без `-coop-*` не меняется.
-- **Клиент не может загрузить уровень или начать новую игру** — временно
-  поставь `BlockSaves = false` в `BepInEx\config\peripeteia.coop.cfg`. Но тогда
-  клиент сможет затереть сохранение хоста.
+- **Клиент не может загрузить уровень или начать новую игру** — клиент теперь
+  сохраняется только в свою папку `Coop - <имя>` и не трогает сейвы хоста, так
+  что для этих сейвов блокировка снята. Если что-то всё равно блокируется,
+  проверь `BlockSaves` в `BepInEx\config\peripeteia.coop.cfg`.
 - **Клиент не может откатиться к другому сохранению посреди уровня** — так и
   задумано (`Client.BlockRollback`): откат откатил бы только его копию общего
   мира и разошёлся бы с хостом. Откатывается хост, и клиент **сам загрузит тот
@@ -372,8 +374,10 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
 Сохранение передаётся само: при подключении клиент скачивает свежее сохранение
 хоста (`Net.AutoDownloadSave`) и автоматически стартует с него
 (`Net.AutoStartDownloadedSave`), пока он ещё в главном меню. Оба ключа
-отключаются в конфиге BepInEx. Клиент по-прежнему не сохраняется сам:
-сохранение делает хост, и откат к нему клиент повторяет за ним.
+отключаются в конфиге BepInEx. Сейв хоста клиент кладёт в свою папку
+`Coop - <имя>` и хранит там **свой** инвентарь, деньги и здоровье (`inv.sfile`),
+поэтому повторное подключение не сбрасывает ваш набор к набору хоста. Откат к
+сейву хоста клиент по-прежнему повторяет за ним.
 
 ## Current limitations
 
@@ -467,6 +471,15 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   the same one, so both worlds rewind together (`SaveLoadSync`). A client cannot
   load a save mid-level on its own (`Client.BlockRollback`) because that would
   rewind only its copy of the world and desync it.
+- A co-op client keeps its own copy of the host save (`Coop - <name>`) and, inside
+  it, its own `inv.sfile` — the separate inventory scene that holds inventory,
+  money and health. The host's download never overwrites that file
+  (`Client.KeepPersonalInventory`), so a rejoin keeps the player's own kit instead
+  of resetting it to the host's. Because the game does not run its level-start
+  autosave on a client, the client writes its own save on level start, the way the
+  host autosaves (`Client.AutosavePersonalState`), and a client save is redirected
+  to that own `Coop - <name>` file (`ClientSaveRedirectPatch`). The player's solo
+  saves are never touched, so they can still play alone.
 - Both instances must enter the same level manually.
 - Both players need the same mod version and game version; the handshake rejects
   mismatches. A client reconnects automatically after a host restart, but the

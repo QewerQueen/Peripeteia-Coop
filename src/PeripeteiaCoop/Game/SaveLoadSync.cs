@@ -87,10 +87,11 @@ internal static class SaveLoadSync
         {
             _applyingRemoteLoad = true;
             _loadsApplied++;
+            string localName = ResolveLocalName(saveName);
             CoopPlugin.LogSource.LogInfo(
-                $"[save] Following the host's rollback to '{saveName}'."
+                $"[save] Following the host's rollback to '{saveName}' (local '{localName}')."
             );
-            handler.LoadProcedure(false, saveName, false);
+            handler.LoadProcedure(false, localName, false);
         }
         catch (Exception exception)
         {
@@ -103,6 +104,29 @@ internal static class SaveLoadSync
         {
             _applyingRemoteLoad = false;
         }
+    }
+
+    /// <summary>
+    /// Maps a host save name to the local name this machine downloaded it under
+    /// ('Coop - &lt;name&gt;'). Falls back to the raw name when no such local save
+    /// exists, so an unmodified single-PC test still works.
+    /// </summary>
+    private static string ResolveLocalName(string hostName)
+    {
+        try
+        {
+            string local = SaveTransfer.LocalNameFor(hostName);
+            if (System.IO.Directory.Exists(System.IO.Path.Combine(SaveTransfer.SaveRoot, local)))
+            {
+                return local;
+            }
+        }
+        catch (Exception)
+        {
+            // fall through to the raw name
+        }
+
+        return hostName;
     }
 
     private static string _pendingStartName = string.Empty;

@@ -23,6 +23,31 @@ internal static class SaveTransfer
     private const int BudgetPerTick = 96 * 1024;
     private const string TempFolder = "temp";
 
+    /// <summary>
+    /// Prefix for a save downloaded from another player. Keeping the host's save
+    /// under its own local name means it can never overwrite a save this player
+    /// made alone, so solo play keeps working (Client.KeepPersonalInventory).
+    /// </summary>
+    private const string CoopSavePrefix = "Coop - ";
+
+    /// <summary>Local save name a downloaded host save is written under.</summary>
+    public static string LocalNameFor(string hostName)
+    {
+        return CoopSavePrefix + hostName;
+    }
+
+    /// <summary>
+    /// True when a save name belongs to this machine's own co-op save (a save it
+    /// downloaded from a host, or wrote itself under that name). Such saves live
+    /// beside the player's solo saves and never touch the host's files, so a
+    /// client is allowed to write them.
+    /// </summary>
+    public static bool IsCoopLocalSave(string? saveName)
+    {
+        return !string.IsNullOrEmpty(saveName) &&
+            saveName!.StartsWith(CoopSavePrefix, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class OutFile
     {
         public string Rel = string.Empty;
@@ -242,11 +267,15 @@ internal static class SaveTransfer
         List<InFile> files = _inFiles;
         _inFiles = null;
 
-        string directory = Path.Combine(SaveRoot, _inName);
+        // The host save is written under a local name so it can never overwrite a
+        // save this player made on their own; that keeps solo play intact.
+        string localName = LocalNameFor(_inName);
+        string directory = Path.Combine(SaveRoot, localName);
         try
         {
             Directory.CreateDirectory(directory);
             int written = 0;
+            int keptPersonal = 0;
             foreach (InFile file in files)
             {
                 string target = Path.Combine(
@@ -259,21 +288,34 @@ internal static class SaveTransfer
                     Directory.CreateDirectory(parent);
                 }
 
+                // inv.sfile is this player's own inventory / money / health scene
+                // save. Keep the local copy so a rejoin never resets the kit to the
+                // host's; only a first join (no local copy yet) takes the host's.
+                if (CoopPlugin.ClientKeepPersonalInventory &&
+                    IsPersonalFile(file.Rel) &&
+                    File.Exists(target))
+                {
+                    keptPersonal++;
+                    continue;
+                }
+
                 File.WriteAllBytes(target, file.Data);
                 written++;
             }
 
-            LastReceivedName = _inName;
+            LastReceivedName = localName;
             _receivedCount++;
             CoopPlugin.LogSource.LogInfo(
-                $"[save] wrote host save '{_inName}' ({written} files) to '{directory}'."
+                $"[save] wrote host save '{_inName}' as '{localName}' ({written} files) " +
+                $"to '{directory}'" +
+                (keptPersonal > 0 ? ", kept the local personal inventory save." : ".")
             );
 
             if (CoopPlugin.Settings.Role == CoopRole.Client && CoopPlugin.AutoStartDownloadedSave)
             {
-                SaveLoadSync.QueueStartFromMainMenu(_inName);
+                SaveLoadSync.QueueStartFromMainMenu(localName);
                 CoopPlugin.LogSource.LogInfo(
-                    $"[save] Will start the run from '{_inName}' once the main menu is ready."
+                    $"[save] Will start the run from '{localName}' once the main menu is ready."
                 );
             }
         }
@@ -283,6 +325,16 @@ internal static class SaveTransfer
                 $"[save] could not write the host save: {exception.GetType().Name}: {exception.Message}"
             );
         }
+    }
+
+    /// <summary>
+    /// The per-player inventory-scene file inside a save. Everything else in a
+    /// save is the shared world; this one file is the player's own inventory,
+    /// money and health.
+    /// </summary>
+    private static bool IsPersonalFile(string relative)
+    {
+        return string.Equals(relative, "inv.sfile", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? FindLatestSaveDirectory()
@@ -298,6 +350,13 @@ internal static class SaveTransfer
             DateTime bestTime = DateTime.MinValue;
             foreach (string directory in Directory.GetDirectories(SaveRoot))
             {
+                // Never send back a save this machine downloaded from another
+                // host: those live under the 'Coop - ' prefix.
+                if (Path.GetFileName(directory).StartsWith(CoopSavePrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 DateTime time = Directory.GetLastWriteTimeUtc(directory);
                 if (time > bestTime)
                 {
