@@ -131,6 +131,24 @@ internal sealed class RemoteAvatar
     private bool _ragdollFrozen;
     private float _ragdollAge;
 
+    // --- Carrying the corpse ------------------------------------------------
+    //
+    // The puppet is stripped of every gameplay component, so the game's own
+    // body drag has nothing to grab. While the local player holds the interact
+    // key over a teammate's body the ragdoll is released and driven toward the
+    // player's aim, and the whole rig is streamed to the other machine, which
+    // moves its own (pinned) corpse to match.
+    private const float CorpsePoseInterval = 1.0f / 15.0f;
+    private const float DragStiffness = 10.0f;
+    private const float DragMaxSpeed = 7.0f;
+
+    private bool _corpseDragging;
+    private float _nextCorpsePoseTime;
+    private Vector3 _dragHoldStart;
+    private readonly List<Vector3> _dragStart = new();
+    private Vector3[] _posePositions = Array.Empty<Vector3>();
+    private Quaternion[] _poseRotations = Array.Empty<Quaternion>();
+
     // A death can arrive before the puppet exists (the avatar is created a beat
     // after the first packets). Keep the pose so the ragdoll can still be built
     // once the visual shows up.
@@ -2149,7 +2167,7 @@ internal sealed class RemoteAvatar
     /// neither their own joints nor the other player's collider can push the
     /// corpse around any more.
     /// </summary>
-    private void FreezeRagdollBodies()
+    private void FreezeRagdollBodies(bool quiet = false)
     {
         _ragdollFrozen = true;
         int frozen = 0;
@@ -2185,6 +2203,233 @@ internal sealed class RemoteAvatar
         );
     }
 
+    /// <summary>
+    /// True when <paramref name="collider"/> is one of this corpse's ragdoll
+    /// parts, i.e. the local player is aiming at the body.
+    /// </summary>
+    public bool IsRagdollCollider(Collider? collider)
+    {
+        if (collider == null || _ragdollBodies.Count == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            Rigidbody? body = collider.attachedRigidbody;
+            if (body == null)
+            {
+                return false;
+            }
+
+            foreach (Rigidbody candidate in _ragdollBodies)
+            {
+                if (candidate == body)
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Starts carrying the corpse. The ragdoll is released again (it was pinned
+    /// once it settled, which is exactly what made it impossible to pick up) and
+    /// the current part positions are remembered so the body can be moved as a
+    /// whole with the player's aim.
+    /// </summary>
+    public void BeginCorpseDrag(Vector3 holdPoint)
+    {
+        if (_corpseDragging || !_dead || !_ragdollActive)
+        {
+            return;
+        }
+
+        _corpseDragging = true;
+        _ragdollFrozen = false;
+        _ragdollAge = 0.0f;
+        _dragHoldStart = holdPoint;
+        _dragStart.Clear();
+
+        try
+        {
+            foreach (Rigidbody body in _ragdollBodies)
+            {
+                if (body == null)
+                {
+                    continue;
+                }
+
+                _dragStart.Add(body.position);
+                body.isKinematic = false;
+                body.useGravity = true;
+                body.velocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] could not release the corpse of remote {Id} for dragging: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+            _corpseDragging = false;
+            return;
+        }
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[death] picking up the corpse of remote {Id} ({_dragStart.Count} parts)."
+        );
+
+        _nextCorpsePoseTime = 0.0f;
+        SendCorpsePose();
+    }
+
+    /// <summary>
+    /// Moves the carried corpse toward the player's aim point and streams the
+    /// rig. Called every frame while the local player holds the body.
+    /// </summary>
+    public void DragCorpse(Vector3 holdPoint)
+    {
+        if (!_corpseDragging)
+        {
+            return;
+        }
+
+        // Keep the settle timer from pinning the body mid-carry.
+        _ragdollFrozen = false;
+        _ragdollAge = 0.0f;
+
+        Vector3 delta = holdPoint - _dragHoldStart;
+        try
+        {
+            int count = Mathf.Min(_dragStart.Count, _ragdollBodies.Count);
+            for (int i = 0; i < count; i++)
+            {
+                Rigidbody? body = _ragdollBodies[i];
+                if (body == null)
+                {
+                    continue;
+                }
+
+                Vector3 target = _dragStart[i] + delta;
+                Vector3 velocity = (target - body.position) * DragStiffness;
+                body.velocity = Vector3.ClampMagnitude(velocity, DragMaxSpeed);
+                body.angularVelocity = Vector3.zero;
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] corpse drag failed for remote {Id}: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+            EndCorpseDrag();
+            return;
+        }
+
+        if (Time.unscaledTime >= _nextCorpsePoseTime)
+        {
+            _nextCorpsePoseTime = Time.unscaledTime + CorpsePoseInterval;
+            SendCorpsePose();
+        }
+    }
+
+    /// <summary>Lets go of the corpse; it settles and is pinned again.</summary>
+    public void EndCorpseDrag()
+    {
+        if (!_corpseDragging)
+        {
+            return;
+        }
+
+        _corpseDragging = false;
+        _ragdollAge = 0.0f;
+        _dragStart.Clear();
+
+        CoopPlugin.LogSource.LogInfo($"[death] put down the corpse of remote {Id}.");
+        SendCorpsePose();
+    }
+
+    private void SendCorpsePose()
+    {
+        int count = _ragdollBodies.Count;
+        if (count == 0)
+        {
+            return;
+        }
+
+        if (_posePositions.Length != count)
+        {
+            _posePositions = new Vector3[count];
+            _poseRotations = new Quaternion[count];
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            Rigidbody? body = _ragdollBodies[i];
+            if (body == null)
+            {
+                continue;
+            }
+
+            _posePositions[i] = body.position;
+            _poseRotations[i] = body.rotation;
+        }
+
+        CoopPlugin.Network?.SendCorpsePose(Id, _posePositions, _poseRotations);
+    }
+
+    /// <summary>
+    /// Applies the pose the other machine streamed while it carries this corpse.
+    /// The local rig is pinned first so its joints do not fight the incoming
+    /// transforms.
+    /// </summary>
+    public void ApplyRemoteCorpsePose(Vector3[] positions, Quaternion[] rotations)
+    {
+        if (!_dead || !_ragdollActive || positions == null || rotations == null)
+        {
+            return;
+        }
+
+        if (!_ragdollFrozen)
+        {
+            FreezeRagdollBodies(quiet: true);
+        }
+
+        try
+        {
+            int count = Mathf.Min(
+                positions.Length,
+                Mathf.Min(rotations.Length, _ragdollBodies.Count)
+            );
+            for (int i = 0; i < count; i++)
+            {
+                Rigidbody? body = _ragdollBodies[i];
+                if (body == null)
+                {
+                    continue;
+                }
+
+                body.position = positions[i];
+                body.rotation = rotations[i];
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] could not apply the dragged corpse pose for remote {Id}: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
     private void ExitRagdoll()
     {
         if (!_ragdollActive)
@@ -2195,6 +2440,8 @@ internal sealed class RemoteAvatar
         _ragdollActive = false;
         _ragdollFrozen = false;
         _ragdollAge = 0.0f;
+        _corpseDragging = false;
+        _dragStart.Clear();
 
         try
         {
@@ -2542,6 +2789,7 @@ internal sealed class RemoteAvatar
         _ragdollJoints.Clear();
         _ragdollOriginalLayers.Clear();
         _ragdollInfo.Clear();
+        _dragStart.Clear();
         if (Root != null)
         {
             UnityEngine.Object.Destroy(Root);

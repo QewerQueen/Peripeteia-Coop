@@ -36,6 +36,8 @@ internal sealed class CoopNetwork : IDisposable
         StoryEvent = 12,
         PlayerDeath = 13,
         SaveLoad = 14,
+        SceneChange = 15,
+        CorpsePose = 16,
     }
 
     [Flags]
@@ -51,9 +53,13 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 18;
+    private const int ProtocolVersion = 19;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
+
+    // Carrying a teammate's corpse: how far the player can reach, and how far in
+    // front of the view the body is held.
+    private const float DragReach = 3.2f;
 
     private readonly CoopSettings _settings;
     private readonly EventBasedNetListener _listener;
@@ -82,6 +88,7 @@ internal sealed class CoopNetwork : IDisposable
     private float _autopilotGroundedSince;
     private float _nextAutopilotTime;
     private PlayerMovement? _localPlayer;
+    private ObjectHighlight? _localHighlight;
     private bool _disposed;
     private bool _reconnectPending;
     private float _nextReconnectTime;
@@ -268,6 +275,7 @@ internal sealed class CoopNetwork : IDisposable
         }
 
         float deltaTime = Time.unscaledDeltaTime;
+        UpdateCorpseDrag(localPlayer);
         foreach (RemoteAvatar avatar in _avatars.Values)
         {
             avatar.Update(deltaTime);
@@ -301,7 +309,8 @@ internal sealed class CoopNetwork : IDisposable
                     $"[sync] enemies mirrored={EnemySync.MirrorsSent} deaths={EnemySync.DeathsSent}/{EnemySync.DeathsApplied} " +
                     $"aiTargets={AiTargeting.RegisteredCount} story={StorySync.EventsSent}/{StorySync.EventsApplied} " +
                     $"storyEffects={StorySync.EffectsApplied} playerDeaths={PlayerStateSync.DeathsSent}/{PlayerStateSync.DeathsApplied} " +
-                    $"saveLoads={SaveLoadSync.LoadsRequested}/{SaveLoadSync.LoadsApplied}"
+                    $"saveLoads={SaveLoadSync.LoadsRequested}/{SaveLoadSync.LoadsApplied} " +
+                    $"scenes={SceneSync.ChangesSent}/{SceneSync.ChangesApplied}"
                 );
             }
         }
@@ -1096,6 +1105,87 @@ internal sealed class CoopNetwork : IDisposable
         return Mathf.Clamp(value, -45.0f, 45.0f);
     }
 
+    /// <summary>
+    /// Carries a teammate's corpse: look at the body, hold the game's interact
+    /// key, and the body follows the aim while its pose is streamed to the other
+    /// machine. Releasing the key drops it, and it is pinned again once settled.
+    /// </summary>
+    private void UpdateCorpseDrag(PlayerMovement? localPlayer)
+    {
+        RemoteAvatar? target = null;
+        Vector3 holdPoint = Vector3.zero;
+
+        if (CoopPlugin.PlayerDragRemoteBody &&
+            _settings.Role != CoopRole.Offline &&
+            localPlayer != null &&
+            _avatars.Count > 0)
+        {
+            ObjectHighlight? highlight = LocalHighlight(localPlayer);
+            Camera? camera = Camera.main;
+            if (highlight != null &&
+                highlight.interactBind != null &&
+                highlight.interactBind.down() &&
+                camera != null)
+            {
+                Transform view = camera.transform;
+                if (Physics.Raycast(
+                        view.position,
+                        view.forward,
+                        out RaycastHit hit,
+                        DragReach,
+                        ~0,
+                        QueryTriggerInteraction.Ignore))
+                {
+                    foreach (RemoteAvatar avatar in _avatars.Values)
+                    {
+                        if (avatar.IsRagdollCollider(hit.collider))
+                        {
+                            target = avatar;
+                            break;
+                        }
+                    }
+
+                    if (target != null)
+                    {
+                        holdPoint = view.position +
+                                    view.forward * Mathf.Clamp(hit.distance, 1.0f, DragReach);
+                    }
+                }
+            }
+        }
+
+        foreach (RemoteAvatar avatar in _avatars.Values)
+        {
+            if (avatar == target)
+            {
+                avatar.BeginCorpseDrag(holdPoint);
+                avatar.DragCorpse(holdPoint);
+            }
+            else
+            {
+                avatar.EndCorpseDrag();
+            }
+        }
+    }
+
+    private ObjectHighlight? LocalHighlight(PlayerMovement localPlayer)
+    {
+        if (_localHighlight != null)
+        {
+            return _localHighlight;
+        }
+
+        _localHighlight = localPlayer.GetComponentInChildren<ObjectHighlight>();
+        if (_localHighlight == null)
+        {
+            // ObjectHighlight may live on the camera pivot/frob helper rather
+            // than under the Player root.
+            _localHighlight = UnityEngine.Object.FindObjectOfType<ObjectHighlight>();
+        }
+
+        return _localHighlight;
+    }
+
     private static bool IsLocalPlayerDragging(
         PlayerMovement localPlayer,
         ObjectHighlight? highlight)
@@ -1363,6 +1453,14 @@ internal sealed class CoopNetwork : IDisposable
             case PacketType.SaveLoad:
                 ReceiveSaveLoad(peer, reader);
                 break;
+
+            case PacketType.SceneChange:
+                ReceiveSceneChange(peer, reader);
+                break;
+
+            case PacketType.CorpsePose:
+                ReceiveCorpsePose(peer, reader);
+                break;
         }
     }
 
@@ -1392,6 +1490,150 @@ internal sealed class CoopNetwork : IDisposable
 
         string saveName = reader.GetString();
         SaveLoadSync.ApplyRemoteLoad(saveName);
+    }
+
+    /// <summary>
+    /// A level transition. Either player can lead; the host relays it to the
+    /// other clients so the whole party follows the same one.
+    /// </summary>
+    public void SendSceneChange(string levelName)
+    {
+        if (_settings.Role == CoopRole.Offline ||
+            _net.ConnectedPeersCount == 0 ||
+            string.IsNullOrEmpty(levelName))
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.SceneChange);
+        writer.Put(levelName);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    private void ReceiveSceneChange(NetPeer peer, NetDataReader reader)
+    {
+        string levelName = reader.GetString();
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            var relay = new NetDataWriter();
+            relay.Put((byte)PacketType.SceneChange);
+            relay.Put(levelName);
+            foreach (NetPeer other in _net.ConnectedPeerList)
+            {
+                if (other != peer)
+                {
+                    other.Send(relay, DeliveryMethod.ReliableOrdered);
+                }
+            }
+        }
+
+        SceneSync.ApplyRemoteTransition(levelName);
+    }
+
+    /// <summary>
+    /// Pose of a remote corpse while the local player is carrying it: one
+    /// position/rotation per ragdoll part. Sent unreliably and often, like the
+    /// player pose, so a lost packet is harmless.
+    /// </summary>
+    public void SendCorpsePose(int id, Vector3[] positions, Quaternion[] rotations)
+    {
+        if (_settings.Role == CoopRole.Offline ||
+            _net.ConnectedPeersCount == 0 ||
+            positions == null ||
+            rotations == null)
+        {
+            return;
+        }
+
+        int count = Mathf.Min(positions.Length, rotations.Length);
+        if (count == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        WriteCorpsePose(writer, id, positions, rotations, count);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            _net.SendToAll(writer, DeliveryMethod.Unreliable);
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.Unreliable);
+    }
+
+    private static void WriteCorpsePose(
+        NetDataWriter writer,
+        int id,
+        Vector3[] positions,
+        Quaternion[] rotations,
+        int count
+    )
+    {
+        writer.Put((byte)PacketType.CorpsePose);
+        writer.Put(id);
+        writer.Put((byte)count);
+        for (int i = 0; i < count; i++)
+        {
+            writer.Put(positions[i].x);
+            writer.Put(positions[i].y);
+            writer.Put(positions[i].z);
+            writer.Put(rotations[i].x);
+            writer.Put(rotations[i].y);
+            writer.Put(rotations[i].z);
+            writer.Put(rotations[i].w);
+        }
+    }
+
+    private void ReceiveCorpsePose(NetPeer peer, NetDataReader reader)
+    {
+        int id = reader.GetInt();
+        int count = reader.GetByte();
+
+        var positions = new Vector3[count];
+        var rotations = new Quaternion[count];
+        for (int i = 0; i < count; i++)
+        {
+            positions[i] = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+            rotations[i] = new Quaternion(
+                reader.GetFloat(),
+                reader.GetFloat(),
+                reader.GetFloat(),
+                reader.GetFloat()
+            );
+        }
+
+        if (id != _localId && _avatars.TryGetValue(id, out RemoteAvatar? avatar))
+        {
+            avatar.ApplyRemoteCorpsePose(positions, rotations);
+        }
+
+        if (_settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        var relay = new NetDataWriter();
+        WriteCorpsePose(relay, id, positions, rotations, count);
+        foreach (NetPeer other in _net.ConnectedPeerList)
+        {
+            if (other != peer)
+            {
+                other.Send(relay, DeliveryMethod.Unreliable);
+            }
+        }
     }
 
     private void ReceiveHello(NetPeer peer, NetDataReader reader)

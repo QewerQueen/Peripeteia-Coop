@@ -21,12 +21,16 @@
   телепорты «забирает» тот, кто дошёл первым; мировые эффекты квестовых кнопок
   (двери, поршни, лифты, вкл/выкл объектов) повторяются у второго игрока;
 - общую смерть: удалённое тело падает рэгдоллом и встаёт при оживлении, при этом
-  труп товарища нельзя обыскать;
+  труп товарища нельзя обыскать, а само тело можно **перетаскивать**;
+- общие **переходы между уровнями**: кто первым вошёл в переход, тот и «тянет»
+  второго игрока в тот же уровень;
+- **общие награды** после квестов: награду через `ItemInfo.pickupitem` получают
+  оба (`Story.ShareQuestRewards`);
 - меню по ESC, которое открывается, но не ставит мир на паузу, чтобы
   неактивное окно не замирало.
 
-Инвентарь, экипировка, патроны, деньги, реакции AI на клиента, катсцены и
-переходы между сценами пока не синхронизируются.
+Инвентарь, экипировка, патроны, деньги и реакции AI на клиента пока не
+синхронизируются.
 
 ## 1. Подготовка
 
@@ -140,6 +144,22 @@
     тело должно встать и снова анимироваться. Настройки `Player.SyncDeath` и
     `Player.DeathRagdoll`. Если у модели нет запечённого рига, тело просто
     замирает на месте.
+13. **Перенос тела.** Подойди к лежащему трупу напарника, наведись на него и
+    задержи штатную клавишу взаимодействия — тело должно поехать за прицелом, а
+    в логе появиться `[death] picking up the corpse of remote N`. Во втором окне
+    труп должен двигаться так же; после отпускания в логе
+    `[death] put down the corpse of remote N`, и тело снова фиксируется
+    (`[death] remote N corpse settled after ...`). Настройка
+    `Player.DragRemoteBody`.
+14. **Переход между уровнями.** Войди в дверь/переход на уровне первым в одном
+    окне. В логе этого окна: `[scene] level transition to '<сцена>' shared with
+    the other player.` Во втором окне: `[scene] following the other player to
+    '<сцена>'.`, и оно должно само уехать в тот же уровень. Настройка
+    `World.SyncSceneTransitions`; в строке `[sync]` счётчик `scenes=sent/applied`.
+15. **Награды после квеста.** Возьми награду у квестового объекта/диалога: в
+    логе `[story] ... ItemInfo.pickupitem ...` (или `[story] applied remote
+    ...`), и предмет должен оказаться в инвентаре **обоих** игроков, не появившись
+    вторым «мировым» предметом. Настройка `Story.ShareQuestRewards`.
 
 Если оба игрока появились в одной точке, просто разойдитесь — модель может
 стоять внутри модели.
@@ -192,7 +212,7 @@ BepInEx/LogOutput.1.log
 [doors] registered=18 scene='tutorial'.
 [items] known=... groups=... scene='...'
 [weapon] local item='...' template='...' hash=...
-[sync] enemies mirrored=... deaths=.../... story=.../... storyEffects=... playerDeaths=.../... saveLoads=.../...
+[sync] enemies mirrored=... deaths=.../... story=.../... storyEffects=... playerDeaths=.../... saveLoads=.../... scenes=.../...
 [ai] remote player 1 registered as a target on '...'
 [story] dialogue consumed: '...'
 [story] dialogue '...' started away from the local player; ignoring.
@@ -213,9 +233,14 @@ BepInEx/LogOutput.1.log
 [death] ragdoll layer for remote 1: 0(Default) (probe=0(Default)).
 [death] remote 1 is down (ragdoll bodies=14, colliders=14, joints=13).
 [death] remote 1 corpse settled after 1.02s; froze 14 bodies.
+[death] picking up the corpse of remote 1 (14 parts).
+[death] put down the corpse of remote 1.
 [death] remote 1 is back up.
 [death] save point (level start) recorded at (x, y, z).
 [death] respawned at the save point (x, y, z) (world kept, no reload).
+[scene] level transition to 'level2' shared with the other player.
+[scene] following the other player to 'level2'.
+[story] quest '...': applied item reward 'ItemInfo.pickupitem'.
 [save] Client blocked an in-level load: rolling back alone would desync the shared world. Only the host can rewind a save.
 [save] Host rolled back to 'Save 3'; asking the other player to load it too.
 [save] Following the host's rollback to 'Save 3'.
@@ -313,10 +338,13 @@ BlockRollback = false
   «забирает» первый, мировые последствия повторяются у второго, включая мировые
   эффекты квестовых кнопок (`Story.SyncQuestEffects`). Катсцены
   (`Story.SyncCutscenes`) и эффекты ветки диалога в журнале заданий
-  (`Story.SyncDialogueActions`) раздаются обоим; полное прохождение узлов VIDE и
-  переходы между сценами пока нет.
+  (`Story.SyncDialogueActions`) раздаются обоим; полное прохождение узлов VIDE
+  пока нет. Награды после квестов получают оба (`Story.ShareQuestRewards`).
 - Смерть игрока общая (`Player.SyncDeath`): тело падает рэгдоллом и встаёт при
-  оживлении, труп нельзя обыскать. Здоровье, урон и инвентарь остаются личными.
+  оживлении, труп нельзя обыскать, а само тело можно перетаскивать
+  (`Player.DragRemoteBody`). Здоровье, урон и инвентарь остаются личными.
+- Переходы между уровнями общие (`World.SyncSceneTransitions`): кто вошёл первым,
+  тот и тянет второго в тот же уровень.
 - Нет синхронизации инвентаря, экипировки, патронов и денег.
 - Оружие на удалённом персонаже — только визуальная копия настоящего
   `ItemInfo`; если шаблон не найден, оружие не отображается.

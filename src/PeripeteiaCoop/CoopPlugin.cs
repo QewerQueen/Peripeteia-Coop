@@ -78,11 +78,15 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool StoryShareQuestRewards { get; private set; } = true;
 
+    internal static bool SyncSceneTransitions { get; private set; } = true;
+
     internal static bool PlayerSyncDeath { get; private set; } = true;
 
     internal static bool PlayerDeathRagdoll { get; private set; } = true;
 
     internal static bool PlayerRespawnOnDeath { get; private set; } = true;
+
+    internal static bool PlayerDragRemoteBody { get; private set; } = true;
 
     internal static bool BlockClientRollback { get; private set; } = true;
 
@@ -296,7 +300,7 @@ public sealed class CoopPlugin : BasePlugin
             "Story",
             "ShareItemRewards",
             true,
-            "Also replay the listeners that hand the player their equipment (GiftGiver.GiveAllGifts / GiveGiftAtIndex) so both players get the same starting weapons and kit. World pickups (ItemInfo.pickupitem) are never replayed - those objects are already shared - so the teammate cannot end up with two of the same weapon. Turn off if a unique quest item must stay single."
+            "Also replay the listeners that hand the player their equipment (GiftGiver.GiveAllGifts / GiveGiftAtIndex) so both players get the same starting weapons and kit. Turn off if a unique quest item must stay single."
         ).Value;
 
         StoryShareQuestRewards = Config.Bind(
@@ -325,6 +329,20 @@ public sealed class CoopPlugin : BasePlugin
             "RespawnOnDeath",
             true,
             "On death, stand the player back up at the last save point instead of reloading the level. Keeps the shared world (doors, NPCs, quest state) exactly as it was for both players. Turn off to use the game's normal death-load."
+        ).Value;
+
+        PlayerDragRemoteBody = Config.Bind(
+            "Player",
+            "DragRemoteBody",
+            true,
+            "Let you pick up the other player's body: look at the corpse and hold the game's interact key to carry it, and the other machine sees it move. The corpse is released when you let go, and pinned again once it settles."
+        ).Value;
+
+        SyncSceneTransitions = Config.Bind(
+            "World",
+            "SyncSceneTransitions",
+            true,
+            "Keep level transitions in step: when one player walks into a level exit, the other machine plays the same transition and follows them into the new level. Turn off to move between levels independently."
         ).Value;
 
         BlockClientRollback = Config.Bind(
@@ -464,6 +482,7 @@ public sealed class CoopPlugin : BasePlugin
             TryPatch(typeof(DeathSavePointQueuedPatch));
             TryPatch(typeof(DeathSavePointAutosavePatch));
             TryPatch(typeof(SaveLoadProcedurePatch));
+            TryPatch(typeof(SceneTransitionPatch));
         }
 
         LogSource.LogInfo(
