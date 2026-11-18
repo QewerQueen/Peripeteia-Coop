@@ -241,14 +241,14 @@ public sealed class CoopPlugin : BasePlugin
             "Ai",
             "TargetRemotePlayer",
             true,
-            "Host only: register the remote player as an AI target so enemies can notice, chase and shoot at the client. Experimental."
+            "Host only: register the remote player as an AI target so enemies can notice, chase and shoot at the client. The puppet also gets an inert HealthScript, because the game ignores any target without one. Experimental."
         ).Value;
 
         AiPerceptionCollider = Config.Bind(
             "Ai",
             "PerceptionCollider",
             true,
-            "Host only: add an inert collider on the layer the game's AI uses to detect the player. The combat proxy lives on the player's own (Ignore Raycast) layer, so without this the host's AI never sees the client. Requires TargetRemotePlayer."
+            "Host only: add an inert collider on the layer the game's AI uses to detect the player. The combat proxy lives on the player's own (Ignore Raycast) layer, so without this the perception rays pass through the puppet. Requires TargetRemotePlayer."
         ).Value;
 
         AiDamageRemotePlayer = Config.Bind(

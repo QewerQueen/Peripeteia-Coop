@@ -381,8 +381,11 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   keeps nearby actors animating, so the snapshot is never a frozen statue. The
   host also registers the remote player as an AI target
   (`Ai.TargetRemotePlayer`, experimental) so enemies can notice, chase and shoot
-  at the client, and gives the puppet an inert collider on the layer the AI looks
-  for the player on (`Ai.PerceptionCollider`), without which the perception rays
+  at the client. The game only accepts a target that carries a live
+  `HealthScript`, and the puppet has none on the host, so it gets an inert
+  disabled one; without it the registration succeeded but enemies ignored the
+  client. The puppet also gets an inert collider on the layer the AI looks for
+  the player on (`Ai.PerceptionCollider`), without which the perception rays
   passed straight through it. Enemy weapons use the same `Shoot` component as the
   player's, so an NPC shot that reaches the client is caught by the same hit path
   as player-versus-player fire and applied on the client's machine through its
