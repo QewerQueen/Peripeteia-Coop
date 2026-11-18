@@ -40,6 +40,10 @@ internal sealed class CoopNetwork : IDisposable
         CorpsePose = 16,
         NpcDamage = 17,
         NpcShot = 18,
+        SaveRequest = 19,
+        SaveManifest = 20,
+        SaveChunk = 21,
+        SaveDone = 22,
     }
 
     [Flags]
@@ -212,6 +216,12 @@ internal sealed class CoopNetwork : IDisposable
                 $"[net] Host listening on UDP {_settings.Port} as '{_settings.PlayerName}' " +
                 $"(protocol={ProtocolVersion}, mod={PluginInfo.Version}, game='{Application.version}')."
             );
+
+            if (CoopPlugin.AdvertiseEnabled)
+            {
+                LanDiscovery.Advertise(_settings.PlayerName, _settings.Port);
+            }
+
             return;
         }
 
@@ -248,6 +258,16 @@ internal sealed class CoopNetwork : IDisposable
 
         string localScene = localPlayer != null ? localPlayer.gameObject.scene.name : string.Empty;
         bool localReady = IsLocalPlayerReady(localPlayer);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            SaveTransfer.TickHost();
+
+            if (CoopPlugin.AdvertiseEnabled)
+            {
+                LanDiscovery.UpdateBeacon(localScene, SaveTransfer.CountSaves());
+            }
+        }
 
         if (_settings.Role == CoopRole.Client &&
             _reconnectPending &&
@@ -480,14 +500,22 @@ internal sealed class CoopNetwork : IDisposable
 
     public void SendDoorState(string key, bool open, bool locked)
     {
-        if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
+        if (_settings.Role == CoopRole.Offline || _net.ConnectedPeersCount == 0)
         {
             return;
         }
 
         var writer = new NetDataWriter();
         WriteDoorState(writer, key, open, locked);
-        _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.ReliableOrdered);
     }
 
     public void SendDoorStateTo(NetPeer peer, string key, bool open, bool locked)
@@ -1819,6 +1847,11 @@ internal sealed class CoopNetwork : IDisposable
             EnsureAvatar(0, "Host");
 
             CoopPlugin.LogSource.LogInfo($"[net] Connected to host {peer.Address}:{peer.Port}.");
+
+            if (CoopPlugin.AutoDownloadSave)
+            {
+                SendSaveRequest();
+            }
         }
     }
 
@@ -1883,7 +1916,8 @@ internal sealed class CoopNetwork : IDisposable
             type != PacketType.StoryEvent &&
             type != PacketType.NpcDamage &&
             type != PacketType.NpcShot &&
-            type != PacketType.CorpsePose)
+            type != PacketType.CorpsePose &&
+            type != PacketType.SaveChunk)
         {
             CoopPlugin.LogSource.LogInfo($"[net] Received {type} from {peer.Address}:{peer.Port}.");
         }
@@ -1903,7 +1937,7 @@ internal sealed class CoopNetwork : IDisposable
                 break;
 
             case PacketType.DoorState:
-                ReceiveDoorState(reader);
+                ReceiveDoorState(peer, reader);
                 break;
 
             case PacketType.ItemState:
@@ -1960,6 +1994,22 @@ internal sealed class CoopNetwork : IDisposable
 
             case PacketType.NpcShot:
                 ReceiveNpcShot(reader);
+                break;
+
+            case PacketType.SaveRequest:
+                ReceiveSaveRequest(peer);
+                break;
+
+            case PacketType.SaveManifest:
+                ReceiveSaveManifest(reader);
+                break;
+
+            case PacketType.SaveChunk:
+                ReceiveSaveChunk(reader);
+                break;
+
+            case PacketType.SaveDone:
+                ReceiveSaveDone();
                 break;
         }
     }
@@ -2068,6 +2118,134 @@ internal sealed class CoopNetwork : IDisposable
         var origin = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
         var direction = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
         NpcShotSync.SpawnVisual(origin, direction);
+    }
+
+    /// <summary>
+    /// Client only: asks the host for its newest save, so both machines start the
+    /// run from the same file. Sent automatically on connect when
+    /// <see cref="CoopPlugin.AutoDownloadSave"/> is on, and from the menu button.
+    /// </summary>
+    public void SendSaveRequest()
+    {
+        if (_settings.Role != CoopRole.Client)
+        {
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        if (host == null)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.SaveRequest);
+        host.Send(writer, DeliveryMethod.ReliableOrdered);
+        CoopPlugin.LogSource.LogInfo("[save] requested the host save.");
+    }
+
+    /// <summary>Host only: announces the save about to be streamed.</summary>
+    public void SendSaveManifest(string name, string[] rels, int[] sizes)
+    {
+        if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.SaveManifest);
+        writer.Put(name ?? string.Empty);
+        int count = rels?.Length ?? 0;
+        writer.Put((ushort)count);
+        for (int i = 0; i < count; i++)
+        {
+            writer.Put(rels![i]);
+            writer.Put(sizes[i]);
+        }
+
+        _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Host only: one slice of one save file.</summary>
+    public void SendSaveChunk(int index, int offset, byte[] data)
+    {
+        if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.SaveChunk);
+        writer.Put(index);
+        writer.Put(offset);
+        writer.Put(data);
+        _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Host only: the save has been fully streamed.</summary>
+    public void SendSaveDone()
+    {
+        if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.SaveDone);
+        _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    private void ReceiveSaveRequest(NetPeer peer)
+    {
+        if (_settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        SaveTransfer.OnSaveRequested();
+    }
+
+    private void ReceiveSaveManifest(NetDataReader reader)
+    {
+        if (_settings.Role == CoopRole.Host)
+        {
+            return;
+        }
+
+        string name = reader.GetString();
+        int count = reader.GetUShort();
+        var rels = new string[count];
+        var sizes = new int[count];
+        for (int i = 0; i < count; i++)
+        {
+            rels[i] = reader.GetString();
+            sizes[i] = reader.GetInt();
+        }
+
+        SaveTransfer.OnManifest(name, rels, sizes);
+    }
+
+    private void ReceiveSaveChunk(NetDataReader reader)
+    {
+        if (_settings.Role == CoopRole.Host)
+        {
+            return;
+        }
+
+        int index = reader.GetInt();
+        int offset = reader.GetInt();
+        byte[] data = reader.GetRemainingBytes();
+        SaveTransfer.OnChunk(index, offset, data);
+    }
+
+    private void ReceiveSaveDone()
+    {
+        if (_settings.Role == CoopRole.Host)
+        {
+            return;
+        }
+
+        SaveTransfer.OnDone();
     }
 
     /// <summary>
@@ -2352,9 +2530,9 @@ internal sealed class CoopNetwork : IDisposable
         }
     }
 
-    private void ReceiveDoorState(NetDataReader reader)
+    private void ReceiveDoorState(NetPeer peer, NetDataReader reader)
     {
-        if (_settings.Role != CoopRole.Client)
+        if (_settings.Role == CoopRole.Offline)
         {
             return;
         }
@@ -2362,6 +2540,20 @@ internal sealed class CoopNetwork : IDisposable
         string key = reader.GetString();
         bool open = reader.GetBool();
         bool locked = reader.GetBool();
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            // Relay a client's change to the other clients (3+ player sessions).
+            var relay = new NetDataWriter();
+            WriteDoorState(relay, key, open, locked);
+            foreach (NetPeer other in _net.ConnectedPeerList)
+            {
+                if (other != peer)
+                {
+                    other.Send(relay, DeliveryMethod.ReliableOrdered);
+                }
+            }
+        }
 
         DoorSync.Apply(key, open, locked);
     }

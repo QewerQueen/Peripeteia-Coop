@@ -104,6 +104,79 @@ internal static class SaveLoadSync
             _applyingRemoteLoad = false;
         }
     }
+
+    private static string _pendingStartName = string.Empty;
+    private static float _nextStartTry;
+
+    /// <summary>
+    /// Client side: remember a save that should start from the main menu once the
+    /// scene is ready. Used right after the host's save is downloaded, so the
+    /// client drops into the shared run instead of opening the load menu.
+    /// </summary>
+    public static void QueueStartFromMainMenu(string saveName)
+    {
+        if (string.IsNullOrEmpty(saveName))
+        {
+            return;
+        }
+
+        _pendingStartName = saveName;
+    }
+
+    /// <summary>Pump the queued start; safe to call every frame.</summary>
+    public static void TickAutoStart()
+    {
+        if (string.IsNullOrEmpty(_pendingStartName))
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < _nextStartTry)
+        {
+            return;
+        }
+
+        _nextStartTry = Time.unscaledTime + 1.0f;
+        if (TryStartFromMainMenu(_pendingStartName))
+        {
+            _pendingStartName = string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Starts the run from a save while the game is still on the main menu. Both
+    /// the -coop-load test path and the "downloaded the host save" path use it.
+    /// Returns true once the load has been kicked off.
+    /// </summary>
+    public static bool TryStartFromMainMenu(string saveName)
+    {
+        if (string.IsNullOrEmpty(saveName))
+        {
+            return false;
+        }
+
+        SaveHandler? handler = UnityEngine.Object.FindObjectOfType<SaveHandler>();
+        if (handler == null || !handler.onMainMenuScene)
+        {
+            return false;
+        }
+
+        try
+        {
+            CoopPlugin.LogSource.LogInfo($"[save] Starting the run from '{saveName}'.");
+            CoopMenu.ClosePanel();
+            handler.LoadProcedure(false, saveName, false);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogError(
+                $"[save] Could not start from '{saveName}': " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+            return true;
+        }
+    }
 }
 
 /// <summary>

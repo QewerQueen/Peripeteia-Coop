@@ -96,9 +96,23 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool BlockClientRollback { get; private set; } = true;
 
+    internal static bool AdvertiseEnabled { get; private set; } = true;
+
+    internal static bool AutoDownloadSave { get; private set; } = true;
+
+    internal static bool AutoStartDownloadedSave { get; private set; } = true;
+
+    internal static string DefaultPlayerName { get; private set; } = string.Empty;
+
     internal static CoopSettings Settings { get; private set; } = null!;
 
     internal static CoopNetwork? Network { get; private set; }
+
+    private static Harmony? _harmony;
+    private static CoopRunner? _runner;
+    private static CoopMenu? _menu;
+    private static bool _coopPatchesApplied;
+    private static bool _typesRegistered;
 
     internal static bool IsCoopActive => Settings.Role != CoopRole.Offline;
 
@@ -379,6 +393,34 @@ public sealed class CoopPlugin : BasePlugin
             "Stop a co-op client from loading a save mid-level on its own; that would rewind the client's copy of the shared world and desync it from the host. A rollback is a host decision: the host loads the save and the client loads the same one on request. The initial load and scene transitions are still allowed."
         ).Value;
 
+        AdvertiseEnabled = Config.Bind(
+            "Net",
+            "Advertise",
+            true,
+            "Host only: broadcast this machine on the LAN so it appears in the other player's 'Peripeteia Coop' host list. Turn off to stay silent (players can still connect with -coop-connect)."
+        ).Value;
+
+        AutoDownloadSave = Config.Bind(
+            "Net",
+            "AutoDownloadSave",
+            true,
+            "Client only: on connect, automatically download the host's newest save so both machines start from the same file. Turn off to only download it from the menu button."
+        ).Value;
+
+        AutoStartDownloadedSave = Config.Bind(
+            "Net",
+            "AutoStartDownloadedSave",
+            true,
+            "Client only: after the host's save has been downloaded, start the run from it automatically instead of waiting for the player to open the game's load menu. Only happens while the client is still on the main menu."
+        ).Value;
+
+        DefaultPlayerName = Config.Bind(
+            "Net",
+            "PlayerName",
+            Environment.MachineName,
+            "Name shown to the other player and in the LAN host list."
+        ).Value;
+
         Settings = CoopSettings.Parse(Environment.GetCommandLineArgs());
 
         try
@@ -395,14 +437,6 @@ public sealed class CoopPlugin : BasePlugin
             );
         }
 
-        if (Settings.Role != CoopRole.Offline)
-        {
-            // Critical for testing two instances on one PC: the unfocused
-            // window must keep simulating the game world. Do not touch this in
-            // a normal single-player launch.
-            Application.runInBackground = true;
-        }
-
         LogSource.LogInfo($"{PluginInfo.Name} {PluginInfo.Version} loading.");
         LogSource.LogInfo($"Game: {Application.productName} {Application.version}; Unity {Application.unityVersion}.");
         LogSource.LogInfo($"Probe enabled: {ProbeEnabled}");
@@ -410,36 +444,187 @@ public sealed class CoopPlugin : BasePlugin
             $"Coop role={Settings.Role}, port={Settings.Port}, name='{Settings.PlayerName}', autopilot={Settings.AutoPilot}."
         );
 
+        RegisterRuntimeTypes();
+
+        _harmony = new Harmony(PluginInfo.Guid);
+
+        // Always-on patches: probes and client save protection.
+        TryPatch(typeof(PlayerProbePatch));
+        _harmony.PatchAll(typeof(PlayerHierarchyProbe));
+        _harmony.PatchAll(typeof(ClientBlockSaveRequestPatch));
+        _harmony.PatchAll(typeof(ClientBlockQueuedSavePatch));
+        _harmony.PatchAll(typeof(ClientBlockAutosavePatch));
+
+        // The "Peripeteia Coop" menu button and LAN discovery exist even in a
+        // plain single-player launch, so a player can host or join without any
+        // command-line arguments.
+        AddMenu();
+
         if (Settings.Role != CoopRole.Offline)
         {
-            // The remote grip solver is a managed MonoBehaviour added at runtime.
-            // IL2CPP must know the type before AddComponent can create it.
-            try
-            {
-                ClassInjector.RegisterTypeInIl2Cpp<RemoteWeaponIK>();
-                ClassInjector.RegisterTypeInIl2Cpp<RemoteHitProxy>();
-                LogSource.LogInfo("Remote weapon IK and combat hit proxy components registered.");
-            }
-            catch (Exception exception)
-            {
-                LogSource.LogError(
-                    $"Failed to register RemoteWeaponIK: {exception.GetType().Name}: {exception.Message}"
-                );
-            }
-
-            Network = new CoopNetwork(Settings);
-            Network.Start();
+            ApplyCoopPatches();
+            EnsureSessionInfrastructure();
         }
         else
         {
-            LogSource.LogInfo("Coop networking is off. Use -coop-host or -coop-connect <address> to enable.");
+            LogSource.LogInfo(
+                "Coop networking is off. Open the in-game 'Peripeteia Coop' menu to host or join, " +
+                "or use -coop-host / -coop-connect <address>."
+            );
         }
 
-        if (Network != null)
+        LogSource.LogInfo("Ready. Solo test: launch a second instance; see docs/SOLO_TESTING.md.");
+    }
+
+    /// <summary>
+    /// Register the managed MonoBehaviours the mod adds at runtime. IL2CPP must
+    /// know a type before AddComponent can create it. Safe to call repeatedly.
+    /// </summary>
+    private static void RegisterRuntimeTypes()
+    {
+        if (_typesRegistered)
+        {
+            return;
+        }
+
+        _typesRegistered = true;
+
+        try
+        {
+            ClassInjector.RegisterTypeInIl2Cpp<RemoteWeaponIK>();
+            ClassInjector.RegisterTypeInIl2Cpp<RemoteHitProxy>();
+            ClassInjector.RegisterTypeInIl2Cpp<CoopMenu>();
+            LogSource.LogInfo("Runtime components registered (weapon IK, hit proxy, co-op menu).");
+        }
+        catch (Exception exception)
+        {
+            LogSource.LogError(
+                $"Failed to register runtime components: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    private static void AddMenu()
+    {
+        try
+        {
+            _menu = Instance.AddComponent<CoopMenu>();
+            LogSource.LogInfo("In-game co-op menu created.");
+        }
+        catch (Exception exception)
+        {
+            LogSource.LogError(
+                $"Failed to create the co-op menu: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    private static void TryPatch(Type type)
+    {
+        if (_harmony == null)
+        {
+            return;
+        }
+
+        try
+        {
+            _harmony.PatchAll(type);
+        }
+        catch (Exception exception)
+        {
+            LogSource.LogWarning(
+                $"[harmony] patch '{type.Name}' failed: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    /// <summary>
+    /// The gameplay patches. Applied at load when the role came from the command
+    /// line, or later when the player hosts/joins from the menu. Guarded so it
+    /// only ever runs once.
+    /// </summary>
+    private static void ApplyCoopPatches()
+    {
+        if (_coopPatchesApplied)
+        {
+            return;
+        }
+
+        _coopPatchesApplied = true;
+
+        TryPatch(typeof(DoorRegisterStartPatch));
+        TryPatch(typeof(DoorRegisterOnStartPatch));
+        TryPatch(typeof(ItemRegisterStartPatch));
+        TryPatch(typeof(ItemRegisterOnStartPatch));
+        TryPatch(typeof(ItemRegisterOnLoadPatch));
+        TryPatch(typeof(ItemRegisterDroppedPatch));
+        TryPatch(typeof(ItemRegisterDroppedDetailedPatch));
+        TryPatch(typeof(ItemPickupEventPatch));
+        TryPatch(typeof(ItemBottleBreakPatch));
+        TryPatch(typeof(ItemGenericBreakPatch));
+        TryPatch(typeof(WeaponFireSimplePatch));
+        TryPatch(typeof(WeaponFireAtPointPatch));
+        TryPatch(typeof(WeaponFireAtPointTriggerPatch));
+        TryPatch(typeof(NpcShotFireSimplePatch));
+        TryPatch(typeof(NpcShotFireAtPointPatch));
+        TryPatch(typeof(NpcShotFireAtPointTriggerPatch));
+        TryPatch(typeof(CombatFireSimplePatch));
+        TryPatch(typeof(CombatFireAtPointPatch));
+        TryPatch(typeof(CombatFireAtPointTriggerPatch));
+        TryPatch(typeof(EnemyControllerUpdatePatch));
+        TryPatch(typeof(EnemyMoverLateUpdatePatch));
+        TryPatch(typeof(AiCalculateThreatPatch));
+        TryPatch(typeof(SensesClearTargetsPatch));
+        TryPatch(typeof(NpcDamageTakePatch));
+        TryPatch(typeof(StoryConversationStartPatch));
+        TryPatch(typeof(StoryQuestActionPatch));
+        TryPatch(typeof(StoryTeleportWalkInPatch));
+        TryPatch(typeof(StoryTeleportPatch));
+        TryPatch(typeof(StoryPuzzleTeleportPatch));
+        TryPatch(typeof(StoryCutscenePlayPatch));
+        TryPatch(typeof(StoryDialogueActionPatch));
+        TryPatch(typeof(StoryDialogueActionV2Patch));
+        TryPatch(typeof(StoryGiftAllPatch));
+        TryPatch(typeof(StoryGiftAtIndexPatch));
+        TryPatch(typeof(DisableTimeControllerPausePatch));
+        TryPatch(typeof(DisableFocusPausePatch));
+        TryPatch(typeof(MainMenuOpenProbePatch));
+        TryPatch(typeof(DeathRespawnPatch));
+        TryPatch(typeof(DeathSavePointSavePatch));
+        TryPatch(typeof(DeathSavePointQueuedPatch));
+        TryPatch(typeof(DeathSavePointAutosavePatch));
+        TryPatch(typeof(SaveLoadProcedurePatch));
+        TryPatch(typeof(SceneTransitionPatch));
+
+        LogSource.LogInfo(
+            "Co-op patches applied: doors, items, weapons, combat, story, death and level transitions."
+        );
+    }
+
+    /// <summary>
+    /// Bring up the network session (host or client) and its heartbeat. Called
+    /// at load for a command-line role, or from the menu button at runtime.
+    /// </summary>
+    internal static void EnsureSessionInfrastructure()
+    {
+        // Critical for testing two instances on one PC: the unfocused window
+        // must keep simulating the game world. Not touched in a solo launch.
+        Application.runInBackground = true;
+
+        RegisterRuntimeTypes();
+
+        if (Network == null)
+        {
+            Network = new CoopNetwork(Settings);
+            Network.Start();
+        }
+
+        if (_runner == null)
         {
             try
             {
-                AddComponent<CoopRunner>();
+                _runner = Instance.AddComponent<CoopRunner>();
                 LogSource.LogInfo("Network tick: CoopRunner MonoBehaviour created.");
             }
             catch (Exception exception)
@@ -449,82 +634,50 @@ public sealed class CoopPlugin : BasePlugin
                 );
             }
         }
+    }
 
-        var harmony = new Harmony(PluginInfo.Guid);
-
-        void TryPatch(Type type)
+    /// <summary>Menu action: host a session on the configured port.</summary>
+    internal static void StartHostSession(string? playerName)
+    {
+        if (IsCoopActive)
         {
-            try
-            {
-                harmony.PatchAll(type);
-            }
-            catch (Exception exception)
-            {
-                LogSource.LogWarning(
-                    $"[harmony] patch '{type.Name}' failed: " +
-                    $"{exception.GetType().Name}: {exception.Message}"
-                );
-            }
+            LogSource.LogWarning("[menu] a co-op session is already running.");
+            return;
         }
 
-        TryPatch(typeof(PlayerProbePatch));
-        harmony.PatchAll(typeof(PlayerHierarchyProbe));
-        harmony.PatchAll(typeof(ClientBlockSaveRequestPatch));
-        harmony.PatchAll(typeof(ClientBlockQueuedSavePatch));
-        harmony.PatchAll(typeof(ClientBlockAutosavePatch));
-
-        if (Settings.Role != CoopRole.Offline)
-        {
-            TryPatch(typeof(DoorRegisterStartPatch));
-            TryPatch(typeof(DoorRegisterOnStartPatch));
-            TryPatch(typeof(ItemRegisterStartPatch));
-            TryPatch(typeof(ItemRegisterOnStartPatch));
-            TryPatch(typeof(ItemRegisterOnLoadPatch));
-            TryPatch(typeof(ItemRegisterDroppedPatch));
-            TryPatch(typeof(ItemRegisterDroppedDetailedPatch));
-            TryPatch(typeof(ItemPickupEventPatch));
-            TryPatch(typeof(ItemBottleBreakPatch));
-            TryPatch(typeof(ItemGenericBreakPatch));
-            TryPatch(typeof(WeaponFireSimplePatch));
-            TryPatch(typeof(WeaponFireAtPointPatch));
-            TryPatch(typeof(WeaponFireAtPointTriggerPatch));
-            TryPatch(typeof(NpcShotFireSimplePatch));
-            TryPatch(typeof(NpcShotFireAtPointPatch));
-            TryPatch(typeof(NpcShotFireAtPointTriggerPatch));
-            TryPatch(typeof(CombatFireSimplePatch));
-            TryPatch(typeof(CombatFireAtPointPatch));
-            TryPatch(typeof(CombatFireAtPointTriggerPatch));
-            TryPatch(typeof(EnemyControllerUpdatePatch));
-            TryPatch(typeof(EnemyMoverLateUpdatePatch));
-            TryPatch(typeof(AiCalculateThreatPatch));
-            TryPatch(typeof(SensesClearTargetsPatch));
-            TryPatch(typeof(NpcDamageTakePatch));
-            TryPatch(typeof(StoryConversationStartPatch));
-            TryPatch(typeof(StoryQuestActionPatch));
-            TryPatch(typeof(StoryTeleportWalkInPatch));
-            TryPatch(typeof(StoryTeleportPatch));
-            TryPatch(typeof(StoryPuzzleTeleportPatch));
-            TryPatch(typeof(StoryCutscenePlayPatch));
-            TryPatch(typeof(StoryDialogueActionPatch));
-            TryPatch(typeof(StoryDialogueActionV2Patch));
-            TryPatch(typeof(StoryGiftAllPatch));
-            TryPatch(typeof(StoryGiftAtIndexPatch));
-            TryPatch(typeof(DisableTimeControllerPausePatch));
-            TryPatch(typeof(DisableFocusPausePatch));
-            TryPatch(typeof(MainMenuOpenProbePatch));
-            TryPatch(typeof(DeathRespawnPatch));
-            TryPatch(typeof(DeathSavePointSavePatch));
-            TryPatch(typeof(DeathSavePointQueuedPatch));
-            TryPatch(typeof(DeathSavePointAutosavePatch));
-            TryPatch(typeof(SaveLoadProcedurePatch));
-            TryPatch(typeof(SceneTransitionPatch));
-        }
-
-        LogSource.LogInfo(
-            "Harmony patches applied: probes, network tick, client save protection, " +
-            "doors, items, weapons, combat and co-op pause policy."
+        Settings.Configure(
+            CoopRole.Host,
+            string.IsNullOrEmpty(playerName) ? DefaultPlayerName : playerName!
         );
-        LogSource.LogInfo("Ready. Solo test: launch a second instance; see docs/SOLO_TESTING.md.");
+        ApplyCoopPatches();
+        EnsureSessionInfrastructure();
+        LogSource.LogInfo($"[menu] hosting as '{Settings.PlayerName}' on UDP {Settings.Port}.");
+    }
+
+    /// <summary>Menu action: join the host at the given address.</summary>
+    internal static void JoinSession(string address, int port, string? playerName)
+    {
+        if (IsCoopActive)
+        {
+            LogSource.LogWarning("[menu] a co-op session is already running.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(address))
+        {
+            LogSource.LogWarning("[menu] no host address to join.");
+            return;
+        }
+
+        Settings.Configure(
+            CoopRole.Client,
+            string.IsNullOrEmpty(playerName) ? DefaultPlayerName : playerName!
+        );
+        Settings.SetAddress(address);
+        Settings.SetPort(port);
+        ApplyCoopPatches();
+        EnsureSessionInfrastructure();
+        LogSource.LogInfo($"[menu] joining {address}:{port} as '{Settings.PlayerName}'.");
     }
 
     internal static void Tick(PlayerMovement? localPlayer)

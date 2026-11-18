@@ -40,6 +40,11 @@ internal static class DoorSync
     private static float _nextDoorTestTime;
     private static int _loggedDoorCount = -1;
 
+    // A client defers to the host's door state until it has received one: its
+    // own level starts with every door closed, and sending that would slam the
+    // host's already-open doors shut the moment the client joins.
+    private static bool _syncedOnce;
+
     public static void Register(doorScript door)
     {
         if (door == null)
@@ -53,7 +58,7 @@ internal static class DoorSync
 
     public static void Tick()
     {
-        if (CoopPlugin.Settings.Role != CoopRole.Host)
+        if (CoopPlugin.Settings.Role == CoopRole.Offline)
         {
             return;
         }
@@ -85,13 +90,24 @@ internal static class DoorSync
             return;
         }
 
-        bool fullSnapshot = now >= _nextSnapshotTime;
+        bool isHost = CoopPlugin.Settings.Role == CoopRole.Host;
+
+        // The client waits for the host's first snapshot before it starts
+        // sending, so its unsynced initial states cannot overwrite the host's.
+        if (!isHost && !_syncedOnce)
+        {
+            return;
+        }
+
+        // Only the host keeps sending the periodic full snapshot; it is the
+        // drift corrector. Both sides still send their own changes.
+        bool fullSnapshot = isHost && now >= _nextSnapshotTime;
         if (fullSnapshot)
         {
             _nextSnapshotTime = now + 3.0f;
         }
 
-        if (CoopPlugin.Settings.DoorTest && now >= _nextDoorTestTime)
+        if (isHost && CoopPlugin.Settings.DoorTest && now >= _nextDoorTestTime)
         {
             _nextDoorTestTime = now + 5.0f;
             ToggleTestDoor();
@@ -146,10 +162,14 @@ internal static class DoorSync
 
     public static void Apply(string key, bool open, bool locked)
     {
-        if (CoopPlugin.Settings.Role != CoopRole.Client)
+        if (CoopPlugin.Settings.Role == CoopRole.Offline)
         {
             return;
         }
+
+        // Receiving anything means the host's snapshot has reached us, so this
+        // side may now start sending its own door changes.
+        _syncedOnce = true;
 
         if (!Doors.TryGetValue(key, out doorScript? door) || door == null)
         {
@@ -162,6 +182,7 @@ internal static class DoorSync
 
         if (door.open == open && door.locked == locked)
         {
+            LastSent[key] = new DoorState(open, locked);
             return;
         }
 
@@ -179,6 +200,10 @@ internal static class DoorSync
         }
 
         door.locked = locked;
+
+        // Suppress the echo: this change came from the peer, so do not send it
+        // straight back.
+        LastSent[key] = new DoorState(open, locked);
         CoopPlugin.LogSource.LogInfo($"[doors] applied open={open} locked={locked}.");
     }
 
@@ -242,6 +267,7 @@ internal static class DoorSync
         _scene = scene;
         Doors.Clear();
         LastSent.Clear();
+        _syncedOnce = false;
         _nextSnapshotTime = 0.0f;
         _nextDoorTestTime = 0.0f;
         _loggedDoorCount = -1;

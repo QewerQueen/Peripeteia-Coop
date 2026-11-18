@@ -63,6 +63,36 @@ internal sealed class CoopSettings
 
     public string LoadSaveName { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// Reconfigure the session at runtime, for the in-game "Peripeteia Coop"
+    /// menu. The command line still works: it just calls these before the first
+    /// frame. A session cannot change role once it is running.
+    /// </summary>
+    public void Configure(CoopRole role, string playerName)
+    {
+        Role = role;
+        if (!string.IsNullOrEmpty(playerName))
+        {
+            PlayerName = playerName;
+        }
+    }
+
+    public void SetAddress(string address)
+    {
+        if (!string.IsNullOrEmpty(address))
+        {
+            Address = address;
+        }
+    }
+
+    public void SetPort(int port)
+    {
+        if (port > 0 && port <= 65535)
+        {
+            Port = port;
+        }
+    }
+
     public static CoopSettings Parse(string[] args)
     {
         var settings = new CoopSettings();

@@ -35,6 +35,7 @@ public sealed class CoopRunner : MonoBehaviour
         }
 
         TryAutoLoadSave();
+        SaveLoadSync.TickAutoStart();
         CoopPlugin.Tick(_localPlayer);
     }
 
@@ -57,25 +58,11 @@ public sealed class CoopRunner : MonoBehaviour
 
         _nextAutoLoadTime = Time.unscaledTime + 1.0f;
 
-        SaveHandler? saveHandler = FindObjectOfType<SaveHandler>();
-        if (saveHandler == null || !saveHandler.onMainMenuScene)
+        if (SaveLoadSync.TryStartFromMainMenu(CoopPlugin.Settings.LoadSaveName))
         {
-            return;
-        }
-
-        _autoLoadAttempted = true;
-        CoopPlugin.LogSource.LogInfo(
-            $"[test] Auto-loading save '{CoopPlugin.Settings.LoadSaveName}' from the main menu."
-        );
-
-        try
-        {
-            saveHandler.LoadProcedure(false, CoopPlugin.Settings.LoadSaveName, false);
-        }
-        catch (System.Exception exception)
-        {
-            CoopPlugin.LogSource.LogError(
-                $"[test] Auto-load failed: {exception.GetType().Name}: {exception.Message}"
+            _autoLoadAttempted = true;
+            CoopPlugin.LogSource.LogInfo(
+                $"[test] Auto-loading save '{CoopPlugin.Settings.LoadSaveName}' from the main menu."
             );
         }
     }
