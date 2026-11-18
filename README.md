@@ -392,12 +392,18 @@ NullReferenceException
 
 - **Host game** — запустить игру как хост (её видно в списке у других).
 - Список хостов в локальной сети — нажмите на строку, чтобы подключиться.
+- **Connect by IP** — подключиться к хосту по адресу `IP:порт` (например
+  `26.12.34.56:7777`); нужно, когда авто-поиск не сработал — через RadminVPN,
+  Hamachi или интернет.
 - **Download and start the host save** (у клиента) — скачать сохранение хоста и
   сразу стартовать с него, без ручного копирования папки `EASaves`.
 
-Хост при запуске рассылает себя в локальную сеть (UDP 47777); клиент слушает
-этот порт. Само соединение идёт по **UDP 7777** — для игры через интернет нужен
-проброс UDP 7777 на роутере или VPN-меш (ZeroTier/Tailscale). Steam P2P в игре
+Хост при запуске рассылает себя в локальную сеть (UDP 47777) — в том числе
+широковещательно в подсеть каждого сетевого интерфейса, поэтому хосты находятся и
+в VPN-сетях вроде RadminVPN или Hamachi. Клиент слушает этот порт. Если хост всё
+равно не появился в списке, введите его IP вручную в поле **Connect by IP**.
+Само соединение идёт по **UDP 7777** — для игры через интернет нужен проброс
+UDP 7777 на роутере или VPN-меш (RadminVPN/ZeroTier/Tailscale). Steam P2P в игре
 нет.
 
 Тот же запуск можно сделать аргументами командной строки. На хосте:
@@ -425,19 +431,31 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
 - Remote avatars use the game's Animator, Q/E lean and a simplified drag-hand
   pose. Held weapons are a visual prototype: the remote side clones a real
   `ItemInfo`, and fire/reload/swing body states and muzzle flashes are replayed.
-  Exact IK, attachments and ammo are not synchronized.
+  The visible attachments are mirrored as well (`Weapon.SyncAttachments`): the
+  owner sends which attachment renderers are enabled and the clone shows the same
+  scope, grip, laser or silencer. Exact IK, ammo and internal weapon state are not
+  synchronized.
 - Player-versus-player damage and collision work through a physics proxy and a
   reliable damage packet. Damage is applied on the victim's machine via the real
-  `HealthScript`. It is a prototype: NPC damage/death, hit regions beyond the
-  body/head capsule, and friendly-fire policy are not finished.
-- Skins, inventory contents, equipment ownership and the other player's item
-  list are not synchronized.
+  `HealthScript`. The proxy has a torso capsule, a head sphere and capsules that
+  follow the arm and leg bones (`Combat.LimbHitboxes`), so the whole body is
+  hittable; a limb hit counts as a body hit (full damage) and only a head hit is a
+  headshot. It is still a prototype: friendly-fire policy is not finished.
+- Character skins are synchronized (`Player.SyncSkins`): each player sends the
+  `MarieVersion` skin index and the other side switches the matching
+  `thirdPersonModels` on, so the two players can look different. Inventory
+  contents, equipment ownership and the other player's item list are still not
+  synchronized.
+- The teammate's condition is shown in a small panel (`Player.TeammateHud`): their
+  name, a health bar and a DOWN marker, streamed in the `PlayerState` packet.
 - Doors and a prototype layer for world items already present in the scene are
   networked. Pickup/drop also send an immediate reliable event, and a broken
-  bottle (or another breakable prop) breaks on both machines. Item sync is
-  last-writer-wins; containers can still diverge. A dropped item the other side
-  never had is cloned from a matching template (`Items.SpawnMissing`, on by
-  default).
+  bottle (or another breakable prop) breaks on both machines. World items are
+  host-authoritative by default (`Items.HostAuthoritative`): the client sends only
+  its own drag stream and discrete pickup/drop requests, and only the host
+  broadcasts the resulting state, so the two machines cannot fight over where an
+  item is. Containers can still diverge. A dropped item the other side never had
+  is cloned from a matching template (`Items.SpawnMissing`, on by default).
 - NPCs and enemies are mirrored host-authoritatively (`Ai.*` config) and deaths
   are shared. Mirrored actors are eased towards each snapshot every frame and the
   host's Animator parameters (float/int/bool) are copied onto the client, which
@@ -528,8 +546,10 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
 - In co-op the ESC menu opens but the world is not paused; focus loss no longer
   opens the menu. This is intentional for solo testing; a normal single-player
   launch keeps the original behavior.
-- Internet play needs port forwarding or a VPN mesh (ZeroTier/Tailscale);
-  the game has no Steam P2P/Workshop networking.
+- Internet play needs port forwarding or a VPN mesh (RadminVPN/ZeroTier/Tailscale);
+  the game has no Steam P2P/Workshop networking. The in-game panel has a
+  "Connect by IP" field and the LAN beacon is also sent to each interface's subnet,
+  so RadminVPN/Hamachi work without the command line.
 
 ## Repository layout
 

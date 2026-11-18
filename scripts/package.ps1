@@ -112,11 +112,17 @@ MANUAL INSTALL (if you prefer)
 
 WHAT WORKS
   - Full cloned player model with the game's animations, Q/E lean and a
-    simplified dragging-hand pose.
+    simplified dragging-hand pose. The teammate can use a different character
+    skin (Player.SyncSkins), and the visible weapon attachments (scope, grip,
+    laser, silencer) are mirrored (Weapon.SyncAttachments).
   - Position/rotation at 30 Hz, host-authoritative doors, and a prototype
-    world-item layer: pickup/drop/drag for items already in the scene.
-  - Player-versus-player: every remote puppet gets a physics proxy and hits are
-    applied through the game's real damage system on the victim's machine.
+    world-item layer: pickup/drop/drag for items already in the scene. World
+    items are host-authoritative by default (Items.HostAuthoritative).
+  - Player-versus-player: every remote puppet gets a physics proxy with a torso,
+    head and limb capsules, and hits are applied through the game's real damage
+    system on the victim's machine.
+  - A small teammate panel shows the other player's name, health bar and DOWN
+    state (Player.TeammateHud).
   - Shared world: NPCs and enemies are mirrored host-authoritatively, and a kill
     by either player counts for both.
   - One shared story branch: a one-time dialogue, quest object or scripted
@@ -132,7 +138,9 @@ NOTES
   - Inventory, money, health and ammo are personal per player. A co-op client
     keeps its own copy of the host save as 'Coop - <name>' and can play alone.
   - Internet play needs UDP port 7777 forwarded, or a VPN mesh such as
-    ZeroTier/Tailscale. The game has no Steam P2P networking.
+    RadminVPN/ZeroTier/Tailscale. The game has no Steam P2P networking. The COOP
+    panel has a "Connect by IP" field, and the host beacon is also sent to each
+    interface's subnet, so RadminVPN/Hamachi work without the command line.
   - Level transitions are kept in step; both players should still start from the
     same save. This is an early prototype, not a complete co-op campaign.
   - Both players need the same game version and mod version. Pin the game

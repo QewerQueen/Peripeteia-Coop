@@ -73,6 +73,9 @@
     <li><strong>Клиент</strong>: нажми <em>Download and start the host save</em>.
         Сохранение хоста скачается, и игра сама начнётся с него.
         Обычно скачивание запускается автоматически при подключении.</li>
+    <li>Если хост не появился в списке, впиши его адрес в поле
+        <em>Connect by IP</em> (формат <code>IP:порт</code>, например
+        <code>26.12.34.56:7777</code>) и нажми кнопку рядом.</li>
     <li>Готово &mdash; вы в одном мире.</li>
   </ol>
 
@@ -81,9 +84,11 @@
   <ul>
     <li>пробросить <strong>UDP-порт 7777</strong> на машине хоста, <em>или</em></li>
     <li>использовать бесплатный VPN-меш вроде
+        <a href="https://radmin-vpn.com/">RadminVPN</a>,
         <a href="https://tailscale.com/">Tailscale</a> или
         <a href="https://www.zerotier.com/">ZeroTier</a> и подключаться по
-        его адресу.</li>
+        его адресу. Хосты в VPN обычно находятся сами, а если нет &mdash;
+        подключись через поле <em>Connect by IP</em> в меню <code>COOP</code>.</li>
   </ul>
 
   <h2>Что общее, а что личное</h2>
@@ -100,7 +105,9 @@
   <ul>
     <li>У обоих игроков должна быть <strong>одна и та же версия игры и мода</strong>.</li>
     <li>Хост не виден в списке &mdash; проверьте, что вы в одной сети и что у
-        обоих стоит мод (в меню есть кнопка <code>COOP</code>).</li>
+        обоих стоит мод (в меню есть кнопка <code>COOP</code>). В VPN-сетях
+        (RadminVPN/Hamachi) подключись вручную через поле
+        <em>Connect by IP</em>.</li>
     <li>Кнопка <code>COOP</code> не появилась &mdash; перезапусти игру; первый
         запуск мог ещё готовить файлы BepInEx.</li>
     <li>Подробности и лог: <code>BepInEx\LogOutput.log</code> в папке игры.</li>
@@ -138,6 +145,9 @@
       <li><strong>Client</strong>: click <em>Download and start the host
           save</em>. The host save is downloaded and the run starts from it
           automatically. The download usually begins on connect.</li>
+      <li>If the host is not listed, type its address into the
+          <em>Connect by IP</em> field (format <code>IP:port</code>, for example
+          <code>26.12.34.56:7777</code>) and click the button next to it.</li>
       <li>Done &mdash; you are in the same world.</li>
     </ol>
 
@@ -146,9 +156,11 @@
     <ul>
       <li>forward <strong>UDP port 7777</strong> on the host machine, <em>or</em></li>
       <li>use a free mesh VPN such as
+          <a href="https://radmin-vpn.com/">RadminVPN</a>,
           <a href="https://tailscale.com/">Tailscale</a> or
           <a href="https://www.zerotier.com/">ZeroTier</a> and connect via its
-          address.</li>
+          address. Hosts are usually found automatically over a VPN; if not, use
+          the <em>Connect by IP</em> field in the <code>COOP</code> panel.</li>
     </ul>
 
     <h2>Shared vs. personal</h2>
@@ -166,7 +178,9 @@
     <ul>
       <li>Both players must run the <strong>same game and mod version</strong>.</li>
       <li>Host not listed &mdash; make sure you are on the same network and that
-          both have the mod (the <code>COOP</code> button is in the menu).</li>
+          both have the mod (the <code>COOP</code> button is in the menu). On a
+          VPN (RadminVPN/Hamachi) connect manually with the
+          <em>Connect by IP</em> field.</li>
       <li>No <code>COOP</code> button &mdash; restart the game; the first launch
           may still have been preparing BepInEx.</li>
       <li>Details and log: <code>BepInEx\LogOutput.log</code> in the game folder.</li>
