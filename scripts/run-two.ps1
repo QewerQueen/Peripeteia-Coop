@@ -27,6 +27,7 @@ param(
     [switch]$AutoPilotHunt,
     [string]$SceneTest = "",
     [switch]$DoorTest,
+    [switch]$CorpseTest,
     [switch]$ProceduralAnimation
 )
 
@@ -86,6 +87,9 @@ if ($LoadSave -and -not $NoCoop) {
 }
 if ($DoorTest -and -not $NoCoop) {
     $hostCoop += " -coop-door-test"
+}
+if ($CorpseTest -and -not $NoCoop) {
+    $hostCoop += " -coop-corpse-test"
 }
 if ($SceneTest -and -not $NoCoop) {
     $hostCoop += " -coop-scene-test $SceneTest"

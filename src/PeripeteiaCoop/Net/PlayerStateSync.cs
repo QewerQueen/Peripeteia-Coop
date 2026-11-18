@@ -103,6 +103,13 @@ internal static class PlayerStateSync
         _nextResendTime = Time.unscaledTime + ResendInterval;
         _deathsSent++;
 
+        if (!dead)
+        {
+            // Back on our feet: forget the carried-corpse rig so a later death
+            // re-collects the freshly ragdolled parts.
+            LocalCorpse.Reset();
+        }
+
         CoopPlugin.Network?.SendPlayerDeath(
             CoopPlugin.Network.LocalId,
             dead,

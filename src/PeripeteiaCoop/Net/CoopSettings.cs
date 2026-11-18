@@ -44,6 +44,14 @@ internal sealed class CoopSettings
     public bool DoorTest { get; private set; }
 
     /// <summary>
+    /// Debug-only solo test mode: the host automatically grabs a dead teammate's
+    /// body and carries it around, so a retest can prove that a corpse drag is
+    /// shared with the body's owner without having to die and hold a key on two
+    /// machines. Never set unless -coop-corpse-test is passed.
+    /// </summary>
+    public bool CorpseTest { get; private set; }
+
+    /// <summary>
     /// Debug-only solo test mode: a scene name to jump to once the session is up,
     /// so a retest can prove that a level transition is shared with the other
     /// machine without having to find a level exit. Never set unless
@@ -118,6 +126,11 @@ internal sealed class CoopSettings
                 case "-coop-door-test":
                 case "--coop-door-test":
                     settings.DoorTest = true;
+                    break;
+
+                case "-coop-corpse-test":
+                case "--coop-corpse-test":
+                    settings.CorpseTest = true;
                     break;
 
                 case "-coop-scene-test":

@@ -488,6 +488,9 @@ public sealed class CoopPlugin : BasePlugin
             TryPatch(typeof(WeaponFireSimplePatch));
             TryPatch(typeof(WeaponFireAtPointPatch));
             TryPatch(typeof(WeaponFireAtPointTriggerPatch));
+            TryPatch(typeof(NpcShotFireSimplePatch));
+            TryPatch(typeof(NpcShotFireAtPointPatch));
+            TryPatch(typeof(NpcShotFireAtPointTriggerPatch));
             TryPatch(typeof(CombatFireSimplePatch));
             TryPatch(typeof(CombatFireAtPointPatch));
             TryPatch(typeof(CombatFireAtPointTriggerPatch));

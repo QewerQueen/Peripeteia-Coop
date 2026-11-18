@@ -401,10 +401,15 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   further intervention. Enemy weapons use the same `Shoot` component as the
   player's, so an NPC shot that reaches the client is caught by the same hit path
   as player-versus-player fire and applied on the client's machine through its
-  real `HealthScript` (`Ai.DamageRemotePlayer`). Damage in the other direction is
-  forwarded too: when the client hits an NPC its `HealthScript.TakeDMG` is
-  intercepted and replayed on the host against the real enemy, which also
-  provokes it (`Ai.NpcDamageFromClient`).
+  real `HealthScript` (`Ai.DamageRemotePlayer`). The shot is also drawn: the
+  client's mirrored weapons are frozen, so they never fire and an enemy shooting
+  at the client used to be invisible on the client's screen. The host now
+  broadcasts each NPC shot (muzzle origin and direction, rate-limited, unreliable)
+  and the client traces the ray against its own level copy and draws a short-lived
+  tracer and muzzle flash, so incoming fire is readable. Damage in the other
+  direction is forwarded too: when the client hits an NPC its
+  `HealthScript.TakeDMG` is intercepted and replayed on the host against the real
+  enemy, which also provokes it (`Ai.NpcDamageFromClient`).
 - The story follows one shared branch (`Story.*` config): a one-time dialogue,
   quest object or scripted teleport is consumed by the first player to reach it,
   and the world GameObjects it switches are replayed on the other machine. A
@@ -428,7 +433,11 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
   surface under the body so the corpse does not fall through the floor. Once the
   fall has settled the corpse is pinned (kinematic) so it can neither keep sliding
   on its own nor be pushed around by the other player. If the model has no rig the
-  body simply stops animating. A dead teammate cannot be searched or looted.
+  body simply stops animating. A dead teammate cannot be searched or looted, but
+  can be carried: look at the body and hold the game's interact key
+  (`Player.DragRemoteBody`). The carrier streams the rig they are moving and the
+  body's owner applies that pose to their own dead body, so the dead player sees
+  the same drag the carrier does.
 - Dying no longer reloads the level (`Player.RespawnOnDeath`): the player stands
   back up at the last save point (or where they entered the level) and the shared
   world keeps its doors, NPCs and quest state. The revived player still sees the

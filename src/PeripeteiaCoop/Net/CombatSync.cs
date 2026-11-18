@@ -706,7 +706,7 @@ internal static class CombatSync
         }
     }
 
-    private static bool TryResolveShotRay(
+    internal static bool TryResolveShotRay(
         Shoot shoot,
         out Vector3 origin,
         out Vector3 direction,

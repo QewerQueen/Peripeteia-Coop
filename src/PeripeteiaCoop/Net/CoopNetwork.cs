@@ -39,6 +39,7 @@ internal sealed class CoopNetwork : IDisposable
         SceneChange = 15,
         CorpsePose = 16,
         NpcDamage = 17,
+        NpcShot = 18,
     }
 
     [Flags]
@@ -105,6 +106,16 @@ internal sealed class CoopNetwork : IDisposable
     // frame, which looked like the carry instantly letting go.
     private RemoteAvatar? _corpseDragTarget;
     private float _corpseDragHold = DefaultDragHold;
+
+    // -coop-corpse-test only: the dead body the host is carrying on autopilot.
+    private RemoteAvatar? _corpseTestTarget;
+    private float _corpseTestTime;
+
+    // The interact keycodes, read once from the game's ObjectHighlight bind so
+    // the carry keeps working even if that component or its bind is rebuilt
+    // mid-drag. Caching the codes (rather than re-reading the bind every frame)
+    // is what stops the body being dropped the moment the highlight flickers.
+    private KeyCode[]? _corpseDragCodes;
     private bool _disposed;
     private bool _reconnectPending;
     private float _nextReconnectTime;
@@ -293,6 +304,7 @@ internal sealed class CoopNetwork : IDisposable
 
         float deltaTime = Time.unscaledDeltaTime;
         UpdateCorpseDrag(localPlayer);
+        ApplyCorpseTest();
         foreach (RemoteAvatar avatar in _avatars.Values)
         {
             avatar.Update(deltaTime);
@@ -327,7 +339,8 @@ internal sealed class CoopNetwork : IDisposable
                     $"aiTargets={AiTargeting.RegisteredCount} story={StorySync.EventsSent}/{StorySync.EventsApplied} " +
                     $"storyEffects={StorySync.EffectsApplied} playerDeaths={PlayerStateSync.DeathsSent}/{PlayerStateSync.DeathsApplied} " +
                     $"saveLoads={SaveLoadSync.LoadsRequested}/{SaveLoadSync.LoadsApplied} " +
-                    $"scenes={SceneSync.ChangesSent}/{SceneSync.ChangesApplied}"
+                    $"scenes={SceneSync.ChangesSent}/{SceneSync.ChangesApplied} " +
+                    $"tracers={NpcShotSync.Sent}/{NpcShotSync.Received} corpses={LocalCorpse.Applied}"
                 );
             }
         }
@@ -349,7 +362,9 @@ internal sealed class CoopNetwork : IDisposable
 
     private void SendLocalPose(PlayerMovement localPlayer)
     {
-        if (Time.unscaledTime < _nextPoseTime || _net.ConnectedPeersCount == 0)
+        if (Time.unscaledTime < _nextPoseTime ||
+            _net.ConnectedPeersCount == 0 ||
+            _localId < 0)
         {
             return;
         }
@@ -841,7 +856,7 @@ internal sealed class CoopNetwork : IDisposable
 
     public void SendWeaponState(WeaponSnapshot snapshot)
     {
-        if (_net.ConnectedPeersCount == 0)
+        if (_net.ConnectedPeersCount == 0 || _localId < 0)
         {
             return;
         }
@@ -861,7 +876,7 @@ internal sealed class CoopNetwork : IDisposable
 
     public void SendWeaponEvent(byte eventKind)
     {
-        if (_net.ConnectedPeersCount == 0)
+        if (_net.ConnectedPeersCount == 0 || _localId < 0)
         {
             return;
         }
@@ -1170,30 +1185,29 @@ internal sealed class CoopNetwork : IDisposable
     /// </summary>
     private void UpdateCorpseDrag(PlayerMovement? localPlayer)
     {
-        ObjectHighlight? highlight = null;
-        Camera? camera = null;
-        bool holding = false;
-
-        if (CoopPlugin.PlayerDragRemoteBody &&
-            _settings.Role != CoopRole.Offline &&
-            localPlayer != null &&
-            _avatars.Count > 0)
-        {
-            highlight = LocalHighlight(localPlayer);
-            camera = Camera.main;
-            holding = highlight != null &&
-                      highlight.interactBind != null &&
-                      highlight.interactBind.down() &&
-                      camera != null;
-        }
-
-        if (!holding)
+        if (!CoopPlugin.PlayerDragRemoteBody ||
+            _settings.Role == CoopRole.Offline ||
+            localPlayer == null ||
+            _avatars.Count == 0)
         {
             ReleaseCorpseDrag();
             return;
         }
 
-        Transform view = camera!.transform;
+        Camera? camera = Camera.main;
+        if (camera == null)
+        {
+            ReleaseCorpseDrag();
+            return;
+        }
+
+        if (!IsInteractHeld(localPlayer))
+        {
+            ReleaseCorpseDrag();
+            return;
+        }
+
+        Transform view = camera.transform;
 
         // Keep the body we already grabbed as long as it is still down.
         if (_corpseDragTarget != null &&
@@ -1220,6 +1234,66 @@ internal sealed class CoopNetwork : IDisposable
         Vector3 holdPoint = view.position + view.forward * _corpseDragHold;
         _corpseDragTarget!.BeginCorpseDrag(holdPoint);
         _corpseDragTarget.DragCorpse(holdPoint);
+    }
+
+    /// <summary>
+    /// True while the game's interact key is held. The keycodes are read once
+    /// from the game's own <see cref="ObjectHighlight"/> bind and then polled
+    /// directly, so a rebuilt bind or a temporarily missing highlight cannot drop
+    /// a body that is already being carried.
+    /// </summary>
+    private bool IsInteractHeld(PlayerMovement localPlayer)
+    {
+        if (_corpseDragCodes == null)
+        {
+            _corpseDragCodes = ResolveInteractCodes(localPlayer);
+        }
+
+        foreach (KeyCode code in _corpseDragCodes)
+        {
+            if (code != KeyCode.None && Input.GetKey(code))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private KeyCode[] ResolveInteractCodes(PlayerMovement localPlayer)
+    {
+        var codes = new List<KeyCode>();
+
+        try
+        {
+            ObjectHighlight? highlight = LocalHighlight(localPlayer);
+            Keybind? bind = highlight != null ? highlight.interactBind : null;
+            if (bind != null)
+            {
+                for (int i = 0; i < 2; i++)
+                {
+                    KeyCode code = bind.getCode(i);
+                    if (code != KeyCode.None && !codes.Contains(code))
+                    {
+                        codes.Add(code);
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Fall back to the game's default interact key below.
+        }
+
+        if (codes.Count == 0)
+        {
+            codes.Add(KeyCode.E);
+        }
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[death] corpse carry uses interact key(s) {string.Join(", ", codes)}."
+        );
+        return codes.ToArray();
     }
 
     /// <summary>
@@ -1294,6 +1368,9 @@ internal sealed class CoopNetwork : IDisposable
             return;
         }
 
+        CoopPlugin.LogSource.LogInfo(
+            $"[death] released the corpse of remote {_corpseDragTarget.Id}."
+        );
         _corpseDragTarget = null;
         foreach (RemoteAvatar avatar in _avatars.Values)
         {
@@ -1345,6 +1422,56 @@ internal sealed class CoopNetwork : IDisposable
         string sceneName = localPlayer.gameObject.scene.name;
         return !string.IsNullOrEmpty(sceneName) &&
                sceneName.IndexOf("menu", StringComparison.OrdinalIgnoreCase) < 0;
+    }
+
+    /// <summary>
+    /// Debug-only solo test helper (-coop-corpse-test). On the host, grabs the
+    /// first dead teammate's body and carries it in a small circle so the body's
+    /// owner can be seen applying the streamed pose (LocalCorpse). Never enabled
+    /// unless the flag is passed.
+    /// </summary>
+    private void ApplyCorpseTest()
+    {
+        if (!_settings.CorpseTest || _settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        if (_corpseTestTarget == null ||
+            !_avatars.ContainsValue(_corpseTestTarget) ||
+            !_corpseTestTarget.IsDead)
+        {
+            _corpseTestTarget = null;
+            foreach (RemoteAvatar avatar in _avatars.Values)
+            {
+                if (avatar != null && avatar.IsDead)
+                {
+                    _corpseTestTarget = avatar;
+                    _corpseTestTime = 0.0f;
+                    CoopPlugin.LogSource.LogInfo(
+                        $"[corpsetest] grabbing the corpse of remote {avatar.Id}."
+                    );
+                    break;
+                }
+            }
+
+            if (_corpseTestTarget == null)
+            {
+                return;
+            }
+        }
+
+        _corpseTestTime += Time.unscaledDeltaTime;
+        Vector3 origin = _localPlayer != null
+            ? _localPlayer.transform.position
+            : _corpseTestTarget.TargetPosition;
+        var hold = origin + new Vector3(
+            Mathf.Cos(_corpseTestTime) * 1.5f,
+            1.0f,
+            Mathf.Sin(_corpseTestTime) * 1.5f
+        );
+        _corpseTestTarget.BeginCorpseDrag(hold);
+        _corpseTestTarget.DragCorpse(hold);
     }
 
     /// <summary>
@@ -1754,7 +1881,9 @@ internal sealed class CoopNetwork : IDisposable
             type != PacketType.EnemyDeath &&
             type != PacketType.PlayerDeath &&
             type != PacketType.StoryEvent &&
-            type != PacketType.NpcDamage)
+            type != PacketType.NpcDamage &&
+            type != PacketType.NpcShot &&
+            type != PacketType.CorpsePose)
         {
             CoopPlugin.LogSource.LogInfo($"[net] Received {type} from {peer.Address}:{peer.Port}.");
         }
@@ -1827,6 +1956,10 @@ internal sealed class CoopNetwork : IDisposable
 
             case PacketType.NpcDamage:
                 ReceiveNpcDamage(peer, reader);
+                break;
+
+            case PacketType.NpcShot:
+                ReceiveNpcShot(reader);
                 break;
         }
     }
@@ -1908,6 +2041,36 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     /// <summary>
+    /// Host only: reports an NPC shot so the client can draw a tracer. Carries
+    /// only the muzzle origin and the shot direction; the client resolves where
+    /// the ray lands against its own copy of the level.
+    /// </summary>
+    public void SendNpcShot(Vector3 origin, Vector3 direction)
+    {
+        if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.NpcShot);
+        writer.Put(origin.x);
+        writer.Put(origin.y);
+        writer.Put(origin.z);
+        writer.Put(direction.x);
+        writer.Put(direction.y);
+        writer.Put(direction.z);
+        _net.SendToAll(writer, DeliveryMethod.Unreliable);
+    }
+
+    private void ReceiveNpcShot(NetDataReader reader)
+    {
+        var origin = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+        var direction = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+        NpcShotSync.SpawnVisual(origin, direction);
+    }
+
+    /// <summary>
     /// Pose of a remote corpse while the local player is carrying it: one
     /// position/rotation per ragdoll part. Sent unreliably and often, like the
     /// player pose, so a lost packet is harmless.
@@ -1982,7 +2145,13 @@ internal sealed class CoopNetwork : IDisposable
             );
         }
 
-        if (id != _localId && _avatars.TryGetValue(id, out RemoteAvatar? avatar))
+        if (id == _localId)
+        {
+            // A teammate is carrying our own body: move the local ragdoll so the
+            // dead player sees the same thing the carrier does.
+            LocalCorpse.Apply(_localPlayer, positions, rotations);
+        }
+        else if (_avatars.TryGetValue(id, out RemoteAvatar? avatar))
         {
             avatar.ApplyRemoteCorpsePose(positions, rotations);
         }
@@ -2120,7 +2289,7 @@ internal sealed class CoopNetwork : IDisposable
         float actionTime = reader.GetFloat();
         bool actionActive = reader.GetBool();
 
-        if (senderId == _localId)
+        if (senderId == _localId || senderId < 0)
         {
             return;
         }
@@ -2412,7 +2581,7 @@ internal sealed class CoopNetwork : IDisposable
     private void ReceiveWeaponState(NetPeer peer, NetDataReader reader)
     {
         WeaponSnapshot snapshot = ReadWeaponState(reader, out int senderId);
-        if (senderId == _localId)
+        if (senderId == _localId || senderId < 0)
         {
             return;
         }
@@ -2488,7 +2657,7 @@ internal sealed class CoopNetwork : IDisposable
     {
         int senderId = reader.GetInt();
         byte kind = reader.GetByte();
-        if (senderId == _localId)
+        if (senderId == _localId || senderId < 0)
         {
             return;
         }
