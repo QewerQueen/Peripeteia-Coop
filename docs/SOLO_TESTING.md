@@ -212,6 +212,7 @@ BepInEx/LogOutput.1.log
 [death] ragdoll rig for remote 1: bodies=14, colliders=14, joints=13, colliderLayers=[9(Player)], playerLayer=2(Ignore Raycast), hitboxLayers=starting=256,default=512,gore=1024.
 [death] ragdoll layer for remote 1: 0(Default) (probe=0(Default)).
 [death] remote 1 is down (ragdoll bodies=14, colliders=14, joints=13).
+[death] remote 1 corpse settled after 1.02s; froze 14 bodies.
 [death] remote 1 is back up.
 [death] save point (level start) recorded at (x, y, z).
 [death] respawned at the save point (x, y, z) (world kept, no reload).

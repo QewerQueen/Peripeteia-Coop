@@ -30,11 +30,37 @@ internal static class DeathRespawn
     private static Vector3 _savePosition;
     private static float _saveYaw;
     private static bool _respawning;
+    private static bool _deliberateLoad;
+    private static float _deliberateLoadTime;
     private static string _scene = string.Empty;
     private static bool _sceneRecorded;
 
+    /// <summary>
+    /// How long a deliberate-load mark stays valid. The mark is set just before
+    /// <c>LoadProcedure</c> reaches <c>LoadProcedureFromDeath</c>; if the load
+    /// bails out first (no <c>DEAD</c> yet) the mark goes stale and must not
+    /// suppress a later death respawn.
+    /// </summary>
+    private const float DeliberateLoadWindow = 10.0f;
+
     public static bool Enabled =>
         CoopPlugin.Settings.Role != CoopRole.Offline && CoopPlugin.PlayerRespawnOnDeath;
+
+    /// <summary>
+    /// Marks the load that is about to run as a real rollback of the shared
+    /// world (the player picked a save, or the host asked for one) instead of
+    /// the game's own "come back from death" step.
+    ///
+    /// Both end up in <c>LoadProcedureFromDeath</c>: the death screen calls
+    /// <c>DEAD.Revive()</c> which calls it, and so does
+    /// <c>SaveHandler.LoadProcedure</c> for every in-level load. Without this
+    /// flag the respawn would swallow deliberate rollbacks too.
+    /// </summary>
+    public static void MarkDeliberateLoad()
+    {
+        _deliberateLoad = true;
+        _deliberateLoadTime = Time.unscaledTime;
+    }
 
     /// <summary>
     /// True while the death prefix is rebuilding the local player in place. A
@@ -77,6 +103,7 @@ internal static class DeathRespawn
             _scene = scene;
             _sceneRecorded = false;
             _hasSavePoint = false;
+            _deliberateLoad = false;
         }
 
         if (!_sceneRecorded && localPlayer != null && localPlayer.gameObject != null)
@@ -136,6 +163,20 @@ internal static class DeathRespawn
             // A revive path re-entered the load; let it through this once so we
             // cannot loop.
             return true;
+        }
+
+        if (_deliberateLoad)
+        {
+            bool fresh = Time.unscaledTime - _deliberateLoadTime < DeliberateLoadWindow;
+            _deliberateLoad = false;
+
+            if (fresh)
+            {
+                // The player (or the host) is deliberately loading a save: the
+                // shared world has to be rebuilt, so the respawn must stand
+                // aside.
+                return true;
+            }
         }
 
         try
@@ -204,11 +245,13 @@ internal static class DeathRespawn
             health.Conciousness = health.maxConciousness;
         }
 
-        DEAD? deathScreen = health.deathScreen;
-        if (deathScreen != null)
-        {
-            deathScreen.Revive();
-        }
+        // NOTE: never call deathScreen.Revive() from here. This prefix runs
+        // *inside* DEAD.Revive() - the death screen is the only caller of
+        // LoadProcedureFromDeath - and that method already rebuilt the player
+        // body and tore the death screen down before it got here. Calling it
+        // again re-enters the revive half way through and throws a
+        // NullReferenceException, which used to fall back to the full load and
+        // leave the player stuck at the origin.
 
         if (health.dead)
         {
@@ -282,9 +325,10 @@ internal static class DeathRespawnPatch
         bool runOriginal = DeathRespawn.TryRespawn();
         if (runOriginal)
         {
-            // The game is reloading the save after all, so the world (and its
-            // story progress) is rebuilt; the one-time locks have to follow.
-            StorySync.ResetLocks("a death load");
+            // The game is reloading the save after all (a failed respawn, or a
+            // deliberate rollback), so the world (and its story progress) is
+            // rebuilt; the one-time locks have to follow.
+            StorySync.ResetLocks("a load");
         }
 
         return runOriginal;

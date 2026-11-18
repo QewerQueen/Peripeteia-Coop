@@ -113,6 +113,15 @@ internal sealed class RemoteAvatar
     private bool _dead;
     private bool _ragdollActive;
 
+    // A simulated ragdoll keeps sliding for a moment (the limb colliders push
+    // each other apart) and the teammate can bump it, which looked like the
+    // corpse crawling around. Once the fall has settled the bodies are pinned
+    // so the body stays exactly where it fell.
+    private const float RagdollMinSettle = 0.7f;
+    private const float RagdollMaxSettle = 3.0f;
+    private bool _ragdollFrozen;
+    private float _ragdollAge;
+
     // A death can arrive before the puppet exists (the avatar is created a beat
     // after the first packets). Keep the pose so the ragdoll can still be built
     // once the visual shows up.
@@ -1876,6 +1885,8 @@ internal sealed class RemoteAvatar
         }
 
         _ragdollActive = true;
+        _ragdollFrozen = false;
+        _ragdollAge = 0.0f;
         _position = position;
         _yaw = rotation.eulerAngles.y;
         Root.transform.position = position;
@@ -1891,6 +1902,8 @@ internal sealed class RemoteAvatar
 
         if (!CoopPlugin.PlayerDeathRagdoll)
         {
+            // The rig is never switched on, so the body is already pinned.
+            _ragdollFrozen = true;
             CoopPlugin.LogSource.LogInfo(
                 $"[death] remote {Id} died; ragdoll disabled, body frozen."
             );
@@ -2021,6 +2034,66 @@ internal sealed class RemoteAvatar
         return string.IsNullOrEmpty(name) ? "<unnamed>" : name;
     }
 
+    private bool RagdollIsSettled()
+    {
+        foreach (Rigidbody body in _ragdollBodies)
+        {
+            if (body == null)
+            {
+                continue;
+            }
+
+            if (body.velocity.sqrMagnitude > 0.09f ||
+                body.angularVelocity.sqrMagnitude > 0.25f)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Pins a settled ragdoll in place: the limb bodies become kinematic so
+    /// neither their own joints nor the other player's collider can push the
+    /// corpse around any more.
+    /// </summary>
+    private void FreezeRagdollBodies()
+    {
+        _ragdollFrozen = true;
+        int frozen = 0;
+
+        try
+        {
+            foreach (Rigidbody body in _ragdollBodies)
+            {
+                if (body == null)
+                {
+                    continue;
+                }
+
+                body.velocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+                body.isKinematic = true;
+                body.useGravity = false;
+                frozen++;
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] could not freeze the ragdoll for remote {Id}: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+            return;
+        }
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[death] remote {Id} corpse settled after {_ragdollAge:F2}s; " +
+            $"froze {frozen} bodies."
+        );
+    }
+
     private void ExitRagdoll()
     {
         if (!_ragdollActive)
@@ -2029,6 +2102,8 @@ internal sealed class RemoteAvatar
         }
 
         _ragdollActive = false;
+        _ragdollFrozen = false;
+        _ragdollAge = 0.0f;
 
         try
         {
@@ -2327,6 +2402,17 @@ internal sealed class RemoteAvatar
             {
                 _pendingDeathPose = false;
                 EnterRagdoll(_pendingDeathPosition, _pendingDeathRotation);
+            }
+
+            // Pin the body once the fall has settled so it cannot keep sliding.
+            if (!_ragdollFrozen && _ragdollActive)
+            {
+                _ragdollAge += deltaTime;
+                if (_ragdollAge >= RagdollMinSettle &&
+                    (_ragdollAge >= RagdollMaxSettle || RagdollIsSettled()))
+                {
+                    FreezeRagdollBodies();
+                }
             }
 
             return;

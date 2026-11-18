@@ -132,6 +132,9 @@ internal static class SaveLoadProcedurePatch
         {
             if (!enteringScene && !fromDEAD && !__instance.onMainMenuScene)
             {
+                // A deliberate rollback, not the death screen's own revive:
+                // the respawn must not swallow it.
+                DeathRespawn.MarkDeliberateLoad();
                 SaveLoadSync.OnHostLoad(saveName);
             }
 
@@ -149,6 +152,12 @@ internal static class SaveLoadProcedurePatch
             __instance.onMainMenuScene ||
             SaveLoadSync.IsApplyingRemoteLoad)
         {
+            if (!enteringScene && !fromDEAD && !__instance.onMainMenuScene)
+            {
+                // Same reasoning as the host branch above.
+                DeathRespawn.MarkDeliberateLoad();
+            }
+
             DeathRespawn.OnLoad();
             StorySync.ResetLocks("a save was loaded");
             return true;

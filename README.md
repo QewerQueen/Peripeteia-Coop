@@ -387,9 +387,10 @@ Peripeteia.exe -coop-connect <IP-хоста> -coop-port 7777 -coop-name Friend
 - Player death is shared (`Player.SyncDeath`): the remote body goes down where it
   fell and stands back up on revive. The game's own baked ragdoll rig is used
   (`Player.DeathRagdoll`); the ragdoll colliders are moved onto the layer of the
-  surface under the body so the corpse does not fall through the floor. If the
-  model has no rig the body simply stops animating. A dead teammate cannot be
-  searched or looted.
+  surface under the body so the corpse does not fall through the floor. Once the
+  fall has settled the corpse is pinned (kinematic) so it can neither keep sliding
+  on its own nor be pushed around by the other player. If the model has no rig the
+  body simply stops animating. A dead teammate cannot be searched or looted.
 - Dying no longer reloads the level (`Player.RespawnOnDeath`): the player stands
   back up at the last save point (or where they entered the level) and the shared
   world keeps its doors, NPCs and quest state. A deliberate rollback to another
