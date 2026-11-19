@@ -486,6 +486,19 @@ internal static class ElevatorSync
         }
     }
 
+    /// <summary>Called for same-scene save loads as well as scene changes.</summary>
+    public static void ResetForLoad()
+    {
+        Elevators.Clear();
+        LastSent.Clear();
+        LastCallTime.Clear();
+        LastLocalCallFloor.Clear();
+        LastLocalCallTime.Clear();
+        _nextRefreshTime = 0.0f;
+        _nextSnapshotTime = 0.0f;
+        _loggedCount = -1;
+    }
+
     private static void EnsureScene()
     {
         string scene = SceneManager.GetActiveScene().name;
@@ -495,13 +508,7 @@ internal static class ElevatorSync
         }
 
         _scene = scene;
-        Elevators.Clear();
-        LastSent.Clear();
-        LastCallTime.Clear();
-        LastLocalCallFloor.Clear();
-        LastLocalCallTime.Clear();
-        _nextSnapshotTime = 0.0f;
-        _loggedCount = -1;
+        ResetForLoad();
     }
 }
 

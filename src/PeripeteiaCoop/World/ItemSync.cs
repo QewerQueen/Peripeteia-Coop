@@ -521,18 +521,28 @@ internal static class ItemSync
 
         foreach (KeyValuePair<string, ItemState> pair in LastSent)
         {
-            if (pair.Value.Alive && SeenActiveKeys.Contains(pair.Key))
+            if (!pair.Key.StartsWith(_scene + "|", StringComparison.Ordinal))
             {
-                CoopPlugin.Network.SendItemState(
-                    pair.Key,
-                    true,
-                    pair.Value.Active,
-                    pair.Value.Position,
-                    pair.Value.Rotation,
-                    pair.Value.Moving,
-                    reliable: true
-                );
+                continue;
             }
+
+            // Removed/hidden items belong in the snapshot too: a peer joining
+            // after a pickup loads the same save and would otherwise see every
+            // item still lying around.
+            if (pair.Value.Alive && !SeenActiveKeys.Contains(pair.Key) && pair.Value.Active)
+            {
+                continue;
+            }
+
+            CoopPlugin.Network.SendItemState(
+                pair.Key,
+                pair.Value.Alive,
+                pair.Value.Active,
+                pair.Value.Position,
+                pair.Value.Rotation,
+                pair.Value.Moving,
+                reliable: true
+            );
         }
     }
 
@@ -1661,15 +1671,12 @@ internal static class ItemSync
         }
     }
 
-    private static void EnsureScene()
+    /// <summary>
+    /// A save is often loaded into the very same scene, so EnsureScene alone
+    /// leaves every item cache bound to objects the load just replaced.
+    /// </summary>
+    public static void ResetForLoad()
     {
-        string scene = SceneManager.GetActiveScene().name;
-        if (scene == _scene)
-        {
-            return;
-        }
-
-        _scene = scene;
         EndAllRemoteMoves();
         KnownItems.Clear();
         KeysByItem.Clear();
@@ -1685,6 +1692,18 @@ internal static class ItemSync
         _nextLogTime = 0.0f;
         _nextKeyRefreshTime = 0.0f;
         _loggedCount = -1;
+    }
+
+    private static void EnsureScene()
+    {
+        string scene = SceneManager.GetActiveScene().name;
+        if (scene == _scene)
+        {
+            return;
+        }
+
+        _scene = scene;
+        ResetForLoad();
         _sentChanges = 0;
         _appliedChanges = 0;
     }

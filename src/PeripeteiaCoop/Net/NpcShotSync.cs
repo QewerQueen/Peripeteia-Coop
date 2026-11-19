@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using HarmonyLib;
 using UnityEngine;
 
@@ -35,7 +36,7 @@ internal static class NpcShotSync
     private const int LogLimit = 8;
 
     private static Material? _tracerMaterial;
-    private static float _nextSendTime;
+    private static readonly Dictionary<int, float> NextSendTimeByWeapon = new();
     private static int _sent;
     private static int _received;
     private static int _logged;
@@ -43,6 +44,11 @@ internal static class NpcShotSync
     public static int Sent => _sent;
 
     public static int Received => _received;
+
+    public static void ResetForLoad()
+    {
+        NextSendTimeByWeapon.Clear();
+    }
 
     /// <summary>Host: called from the Shoot.Fire patches for every weapon.</summary>
     public static void NotifyShot(Shoot shoot)
@@ -65,7 +71,9 @@ internal static class NpcShotSync
             return;
         }
 
-        if (Time.unscaledTime < _nextSendTime)
+        int weaponId = shoot.GetInstanceID();
+        if (NextSendTimeByWeapon.TryGetValue(weaponId, out float nextSendTime) &&
+            Time.unscaledTime < nextSendTime)
         {
             return;
         }
@@ -80,7 +88,7 @@ internal static class NpcShotSync
             return;
         }
 
-        _nextSendTime = Time.unscaledTime + MinSendInterval;
+        NextSendTimeByWeapon[weaponId] = Time.unscaledTime + MinSendInterval;
         _sent++;
         CoopPlugin.Network.SendNpcShot(origin, direction);
     }

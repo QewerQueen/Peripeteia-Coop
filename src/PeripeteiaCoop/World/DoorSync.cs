@@ -167,10 +167,6 @@ internal static class DoorSync
             return;
         }
 
-        // Receiving anything means the host's snapshot has reached us, so this
-        // side may now start sending its own door changes.
-        _syncedOnce = true;
-
         if (!Doors.TryGetValue(key, out doorScript? door) || door == null)
         {
             Refresh();
@@ -179,6 +175,12 @@ internal static class DoorSync
                 return;
             }
         }
+
+        // Receiving a door we can actually apply means the host's snapshot has
+        // reached us, so this side may now start sending its own door changes.
+        // Setting it earlier marks a wrong-scene client as "synced" and lets it
+        // overwrite host doors with stale local state.
+        _syncedOnce = true;
 
         if (door.open == open && door.locked == locked)
         {
@@ -256,6 +258,18 @@ internal static class DoorSync
         }
     }
 
+    /// <summary>Called for same-scene save loads as well as scene changes.</summary>
+    public static void ResetForLoad()
+    {
+        Doors.Clear();
+        LastSent.Clear();
+        _syncedOnce = false;
+        _nextRefreshTime = 0.0f;
+        _nextSnapshotTime = 0.0f;
+        _nextDoorTestTime = 0.0f;
+        _loggedDoorCount = -1;
+    }
+
     private static void EnsureScene()
     {
         string scene = SceneManager.GetActiveScene().name;
@@ -265,12 +279,7 @@ internal static class DoorSync
         }
 
         _scene = scene;
-        Doors.Clear();
-        LastSent.Clear();
-        _syncedOnce = false;
-        _nextSnapshotTime = 0.0f;
-        _nextDoorTestTime = 0.0f;
-        _loggedDoorCount = -1;
+        ResetForLoad();
     }
 
     private static string GetKey(doorScript door)

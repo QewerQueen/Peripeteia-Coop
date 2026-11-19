@@ -38,6 +38,19 @@ internal static class WeaponSync
     private static Vector3 _lastAimDirection;
     private static Vector3 _lastMuzzleWorld;
 
+    /// <summary>
+    /// Templates and cached player scripts belong to the previous world. A
+    /// same-scene load keeps the dictionaries alive unless we clear them here.
+    /// </summary>
+    public static void ResetForLoad()
+    {
+        TemplateCache.Clear();
+        _shoot = null;
+        _lastDescriptor = string.Empty;
+        _nextSendTime = 0.0f;
+        _nextHiddenSendTime = 0.0f;
+    }
+
     public static void Tick(PlayerMovement? localPlayer)
     {
         if (CoopPlugin.Settings.Role == CoopRole.Offline ||

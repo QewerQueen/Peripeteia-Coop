@@ -24,6 +24,11 @@ internal static class AiTargeting
     private static readonly HashSet<string> Done = new();
     private static readonly HashSet<string> Failed = new();
 
+    // Last aim transform registered for each (controller, remote player). The
+    // puppet root is replaced on a respawn/save load; without tracking it the AI
+    // keeps a faction member pointing at the destroyed body.
+    private static readonly Dictionary<string, Transform> RegisteredAims = new();
+
     private const string HealthProxyName = "PeripeteiaCoop_AiHealth";
     private const string PerceptionProxyName = "PeripeteiaCoop_AiProxy";
 
@@ -61,6 +66,7 @@ internal static class AiTargeting
             _scene = scene;
             Done.Clear();
             Failed.Clear();
+            RegisteredAims.Clear();
             AiPerception.Clear();
             _loggedFactions = false;
             _dumped = false;
@@ -120,7 +126,32 @@ internal static class AiTargeting
 
                 // Key on the avatar root too: after a respawn the puppet can be a brand
                 // new GameObject, which must be registered again.
-                string key = controller.GetInstanceID() + ":" + id + ":" + root.GetInstanceID();
+                string pairKey = controller.GetInstanceID() + ":" + id;
+                string key = pairKey + ":" + root.GetInstanceID();
+
+                Transform aim = ResolveAimTransform(root);
+                if (RegisteredAims.TryGetValue(pairKey, out Transform? oldAim) &&
+                    oldAim != null && oldAim != aim)
+                {
+                    // The old body was replaced in the same scene. Remove its AI
+                    // entry before registering the new one so the AI does not keep
+                    // targeting a destroyed transform.
+                    try
+                    {
+                        controller.addCustomTarget(false, oldAim, -1.0f, -1, null!, null!, null!, null!, null!, null!);
+                    }
+                    catch (Exception exception)
+                    {
+                        CoopPlugin.LogSource.LogWarning(
+                            $"[ai] could not unregister the old avatar target: {exception.GetType().Name}."
+                        );
+                    }
+
+                    RegisteredAims.Remove(pairKey);
+                    Done.RemoveWhere(candidate => candidate.StartsWith(pairKey + ":", StringComparison.Ordinal));
+                    Failed.RemoveWhere(candidate => candidate.StartsWith(pairKey + ":", StringComparison.Ordinal));
+                }
+
                 if (Done.Contains(key) || Failed.Contains(key))
                 {
                     continue;
@@ -136,8 +167,6 @@ internal static class AiTargeting
                 // Register the perception proxy (at the body centre) as the centre of
                 // mass when it exists, so the AI aims and looks at the body instead of
                 // the feet. Falls back to the avatar root.
-                Transform aim = ResolveAimTransform(root);
-
                 try
                 {
                     // (add, centerOfMass, sightRange, faction, ec, HP, dmg, aiTarget, senses, hboxes)
@@ -157,6 +186,7 @@ internal static class AiTargeting
                         null!
                     );
                     Done.Add(key);
+                    RegisteredAims[pairKey] = aim;
                     CoopPlugin.LogSource.LogInfo(
                         $"[ai] remote player {id} registered as a target on '{controller.name}' " +
                         $"(faction={faction}, HP proxy on '{root.name}', aim on '{aim.name}')."
@@ -525,6 +555,14 @@ internal static class AiTargeting
                 HealthScript? cached = existing.GetComponent<HealthScript>();
                 if (cached != null)
                 {
+                    // checkCone ignores targets whose HP is dead/unconscious. The
+                    // proxy is inert, but AI damage can still flip those fields;
+                    // restore them so the player does not vanish from every NPC's
+                    // perception until the next scene change.
+                    cached.HP = cached.maxHP;
+                    cached.dead = false;
+                    cached.unconcious = false;
+                    cached.fallen = false;
                     return cached;
                 }
             }
@@ -535,8 +573,8 @@ internal static class AiTargeting
 
             HealthScript health = proxy.AddComponent<HealthScript>();
             health.enabled = false;
-            health.HP = 1;
-            health.maxHP = 1;
+            health.maxHP = 100;
+            health.HP = health.maxHP;
             health.dead = false;
             health.unconcious = false;
             health.fallen = false;

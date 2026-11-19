@@ -284,6 +284,20 @@ internal static class SaveTransfer
         List<InFile> files = _inFiles;
         _inFiles = null;
 
+        // A truncated transfer must never be booted: a zero-filled inv.sfile or
+        // world file would silently destroy the client's save on the next start.
+        foreach (InFile file in files)
+        {
+            if (file.Received != file.Data.Length)
+            {
+                CoopPlugin.LogSource.LogWarning(
+                    $"[save] incomplete download ('{file.Rel}': {file.Received}/{file.Data.Length}); " +
+                    "nothing was written. Reconnect to retry."
+                );
+                return;
+            }
+        }
+
         // The host save is written under a local name so it can never overwrite a
         // save this player made on their own; that keeps solo play intact.
         string localName = LocalNameFor(_inName);

@@ -211,6 +211,21 @@ internal static class SaveLoadSync
 [HarmonyPatch(typeof(SaveHandler), "LoadProcedure")]
 internal static class SaveLoadProcedurePatch
 {
+    /// <summary>
+    /// A rollback usually reloads the same scene, so the scene-name checks in
+    /// the world modules do not fire. Without this their caches still describe
+    /// the destroyed world and fight the freshly loaded one.
+    /// </summary>
+    private static void ResetWorldSyncs()
+    {
+        ItemSync.ResetForLoad();
+        DoorSync.ResetForLoad();
+        ElevatorSync.ResetForLoad();
+        ContainerSync.ResetForLoad();
+        WeaponSync.ResetForLoad();
+        NpcShotSync.ResetForLoad();
+    }
+
     private static bool Prefix(
         SaveHandler __instance,
         bool enteringScene,
@@ -238,6 +253,7 @@ internal static class SaveLoadProcedurePatch
             // A load moves the player; the respawn point has to be re-read from
             // wherever the loaded save puts them, and the story locks have to be
             // rebuilt from the loaded world.
+            ResetWorldSyncs();
             DeathRespawn.OnLoad();
             StorySync.ResetLocks("the host loaded a save");
             EnemySync.ResetForLoad();
@@ -256,6 +272,7 @@ internal static class SaveLoadProcedurePatch
                 DeathRespawn.MarkDeliberateLoad();
             }
 
+            ResetWorldSyncs();
             DeathRespawn.OnLoad();
             StorySync.ResetLocks("a save was loaded");
             EnemySync.ResetForLoad();

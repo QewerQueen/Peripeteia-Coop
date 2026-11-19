@@ -218,6 +218,17 @@ internal static class EnemySync
             return;
         }
 
+        // A snapshot already in flight must not re-attach a mirror target to a
+        // corpse: LateTick would ease the ragdoll root back to its last standing
+        // position and undo the collapse.
+        HealthScript? health = enemy.health;
+        if (health != null && health.dead)
+        {
+            Targets.Remove(key);
+            LastMirror.Remove(key);
+            return;
+        }
+
         Freeze(enemy);
 
         // Store the snapshot; LateTick eases the transform towards it so the
@@ -231,7 +242,6 @@ internal static class EnemySync
         target.Position = position;
         target.Rotation = rotation;
 
-        HealthScript? health = enemy.health;
         if (health != null && !health.dead && hp > 0 && hp <= Mathf.Max(maxHp, 1))
         {
             health.HP = hp;
@@ -418,8 +428,15 @@ internal static class EnemySync
             return;
         }
 
+        // A client-side mirror can already be dead from forwarded damage by the
+        // time the authoritative death arrives. Record the key even then, or the
+        // next PollDeaths announces the same kill back to the host.
+        AnnouncedDead.Add(key);
+
         if (health.dead)
         {
+            Targets.Remove(key);
+            LastMirror.Remove(key);
             return;
         }
 
@@ -434,11 +451,6 @@ internal static class EnemySync
             // last saw it standing and it never collapses.
             Targets.Remove(key);
             LastMirror.Remove(key);
-
-            // A death received from the other machine is already accounted for.
-            // Without this, the next PollDeaths sees the same ragdoll as a fresh
-            // local kill and announces it straight back, producing an echo storm.
-            AnnouncedDead.Add(key);
 
             CoopPlugin.LogSource.LogInfo(
                 $"[ai] applied remote death key='{key}' (dead={health.dead}, ragdoll={RagdollState(enemy)})."
@@ -558,6 +570,58 @@ internal static class EnemySync
         if (KnownEnemies.Count == 0)
         {
             return;
+        }
+
+        // Sibling indices in a key can change when a corpse is reparented or a
+        // save is reloaded. Migrate the cached state instead of leaving the old
+        // key pointing at an enemy the next death packet can no longer find.
+        var migrated = new List<KeyValuePair<string, string>>();
+        foreach (KeyValuePair<string, EnemyController> pair in KnownEnemies)
+        {
+            if (pair.Value == null)
+            {
+                continue;
+            }
+
+            string current = KeyOf(pair.Value);
+            if (!string.Equals(current, pair.Key, StringComparison.Ordinal) &&
+                !KnownEnemies.ContainsKey(current))
+            {
+                migrated.Add(new KeyValuePair<string, string>(pair.Key, current));
+            }
+        }
+
+        foreach (KeyValuePair<string, string> move in migrated)
+        {
+            EnemyController? enemy = null;
+            if (KnownEnemies.TryGetValue(move.Key, out enemy))
+            {
+                KnownEnemies.Remove(move.Key);
+                KnownEnemies[move.Value] = enemy;
+            }
+
+            if (EnemyIds.TryGetValue(move.Key, out int id))
+            {
+                EnemyIds.Remove(move.Key);
+                EnemyIds[move.Value] = id;
+            }
+
+            if (LastMirror.TryGetValue(move.Key, out MirrorState? mirror))
+            {
+                LastMirror.Remove(move.Key);
+                LastMirror[move.Value] = mirror;
+            }
+
+            if (Targets.TryGetValue(move.Key, out MirrorTarget? target))
+            {
+                Targets.Remove(move.Key);
+                Targets[move.Value] = target;
+            }
+
+            if (AnnouncedDead.Remove(move.Key))
+            {
+                AnnouncedDead.Add(move.Value);
+            }
         }
 
         var destroyed = new List<string>();

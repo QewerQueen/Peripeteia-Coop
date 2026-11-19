@@ -167,7 +167,7 @@ internal static class StorySync
 
     public static void OnDialogueStarted(NPCConversation conversation)
     {
-        if (!Enabled || conversation == null)
+        if (!Enabled || IsApplyingRemote || conversation == null)
         {
             return;
         }
@@ -229,7 +229,7 @@ internal static class StorySync
 
     public static void OnQuestActionUsed(QuestAction action)
     {
-        if (!Enabled || action == null)
+        if (!Enabled || IsApplyingRemote || action == null)
         {
             return;
         }
@@ -280,7 +280,7 @@ internal static class StorySync
         bool walkIn = _walkInTeleport;
         _walkInTeleport = false;
 
-        if (!Enabled || !CoopPlugin.StorySyncTeleports || source == null)
+        if (!Enabled || !CoopPlugin.StorySyncTeleports || IsApplyingRemote || source == null)
         {
             return;
         }
@@ -306,7 +306,7 @@ internal static class StorySync
     /// </summary>
     public static void OnPuzzleTeleport(teleportpuzzlebelgrade source)
     {
-        if (!Enabled || !CoopPlugin.StorySyncTeleports || source == null)
+        if (!Enabled || !CoopPlugin.StorySyncTeleports || IsApplyingRemote || source == null)
         {
             return;
         }
@@ -346,7 +346,7 @@ internal static class StorySync
     /// </summary>
     public static void OnVideoPlayed(VideoPlayer player)
     {
-        if (!Enabled || !CoopPlugin.StorySyncCutscenes || _suppressBroadcast || player == null)
+        if (!Enabled || !CoopPlugin.StorySyncCutscenes || IsApplyingRemote || player == null)
         {
             return;
         }
@@ -1788,6 +1788,14 @@ internal static class StorySync
         ObjectsByKey.Clear();
         KnownFlags.Clear();
         _flagComponent = null;
+
+        // The short dedup windows must not swallow genuine effects that happen
+        // immediately after a load (the previous timeline is over).
+        _lastCutsceneKey = string.Empty;
+        _lastCutsceneTime = 0.0f;
+        _lastActionSignature = string.Empty;
+        _lastActionTime = 0.0f;
+        _blockedDialogueKey = string.Empty;
 
         if (consumed > 0)
         {

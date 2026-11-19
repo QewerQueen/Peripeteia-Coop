@@ -30,6 +30,14 @@ internal static class ContainerSync
     private static readonly System.Collections.Generic.Dictionary<string, float> _recent =
         new(StringComparer.Ordinal);
 
+    // A loot packet is a one-shot event. If it arrives while the receiver is
+    // still loading, the container is not registered yet and the removal would
+    // be lost forever, so keep it until the level catches up.
+    private readonly record struct PendingLoot(string Key, int Index, string ItemName);
+
+    private static readonly System.Collections.Generic.List<PendingLoot> _pending = new();
+    private static float _nextPendingTime;
+
     private static int _sent;
     private static int _applied;
     private static int _skippedShops;
@@ -111,6 +119,22 @@ internal static class ContainerSync
         {
             _lastScene = scene;
             ResetForLoad();
+        }
+
+        if (_pending.Count > 0 && Time.unscaledTime >= _nextPendingTime)
+        {
+            _nextPendingTime = Time.unscaledTime + 0.5f;
+            for (int i = _pending.Count - 1; i >= 0; i--)
+            {
+                PendingLoot pending = _pending[i];
+                if (TryApplyLoot(pending.Key, pending.Index, pending.ItemName, false))
+                {
+                    _pending.RemoveAt(i);
+                    CoopPlugin.LogSource.LogInfo(
+                        $"[loot] replayed deferred removal of '{pending.ItemName}' from '{pending.Key}'."
+                    );
+                }
+            }
         }
     }
 
@@ -253,16 +277,32 @@ internal static class ContainerSync
     /// <summary>Replays a removal received from either peer.</summary>
     public static void ApplyLoot(string key, int index, string itemName)
     {
+        TryApplyLoot(key, index, itemName, true);
+    }
+
+    private static bool TryApplyLoot(string key, int index, string itemName, bool queueIfMissing)
+    {
         container? owner = Find(key);
         if (owner == null)
         {
-            CoopPlugin.LogSource.LogWarning($"[loot] container '{key}' not found; ignored.");
-            return;
+            if (queueIfMissing)
+            {
+                var pending = new PendingLoot(key, index, itemName);
+                if (!_pending.Contains(pending))
+                {
+                    _pending.Add(pending);
+                }
+            }
+
+            CoopPlugin.LogSource.LogWarning(
+                $"[loot] container '{key}' not found; {(_pending.Count > 0 ? "deferring" : "ignored")}."
+            );
+            return false;
         }
 
         if (owner.isShop)
         {
-            return;
+            return true;
         }
 
         ItemInfo? item = null;
@@ -299,14 +339,15 @@ internal static class ContainerSync
             CoopPlugin.LogSource.LogWarning(
                 $"[loot] item '{itemName}' #{index} no longer in '{key}'; ignored."
             );
-            return;
+            return true;
         }
 
-        _applied = 0;
+        bool removed = false;
         _applyingRemote = true;
         try
         {
             RemoveItem(owner, item);
+            removed = true;
             _applied++;
             CoopPlugin.LogSource.LogInfo(
                 $"[loot] applied remote removal of '{itemName}' from '{key}'."
@@ -322,11 +363,14 @@ internal static class ContainerSync
         {
             _applyingRemote = false;
         }
+
+        return removed;
     }
 
     public static void ResetForLoad()
     {
         _recent.Clear();
+        _pending.Clear();
         _applyingRemote = false;
     }
 }

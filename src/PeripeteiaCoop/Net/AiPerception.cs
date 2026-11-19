@@ -154,7 +154,11 @@ internal static class AiPerception
         {
             Collider? collider = body.Collider;
             Transform? target = body.Root;
-            if (collider == null || target == null || collider.gameObject == null)
+            // A dead teammate's perception proxy is deactivated, not destroyed.
+            // Unity objects are still non-null then, so without these checks the
+            // AI keeps seeing (and shooting) the corpse.
+            if (collider == null || target == null || collider.gameObject == null ||
+                !collider.enabled || !collider.gameObject.activeInHierarchy)
             {
                 continue;
             }
@@ -430,7 +434,8 @@ internal static class AiPerception
         }
 
         Collider? collider = body.Collider;
-        if (collider == null || collider.gameObject == null)
+        if (collider == null || collider.gameObject == null ||
+            !collider.enabled || !collider.gameObject.activeInHierarchy)
         {
             return null;
         }

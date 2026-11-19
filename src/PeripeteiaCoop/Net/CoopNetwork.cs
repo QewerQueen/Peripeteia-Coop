@@ -2428,6 +2428,11 @@ internal sealed class CoopNetwork : IDisposable
                     other.Send(relay, DeliveryMethod.ReliableOrdered);
                 }
             }
+
+            // The join snapshot was sent while the peer was still in the menu,
+            // where item packets are rejected. Now that it is in the level,
+            // repeat the authoritative item state.
+            ItemSync.SendSnapshot();
         }
 
         SceneSync.ApplyRemoteTransition(levelName);
@@ -3009,11 +3014,15 @@ internal sealed class CoopNetwork : IDisposable
         // Host authority: the host never takes a client's idle item state (its
         // own world is the authority). A client's drag stream (moving) and its
         // discrete pickup/drop/break events still come through.
-        if (CoopPlugin.ItemsHostAuthoritative &&
-            _settings.Role == CoopRole.Host &&
-            !moving)
+        if (CoopPlugin.ItemsHostAuthoritative && _settings.Role == CoopRole.Host)
         {
-            return;
+            // Dragging is a request, not a world edit: an inactive/dead item
+            // must never be hidden or deleted by a client state packet. Those
+            // transitions only arrive as discrete pickup/drop/break events.
+            if (!moving || !alive || !active)
+            {
+                return;
+            }
         }
 
         bool applied = ItemSync.Apply(key, alive, active, position, rotation, moving);
