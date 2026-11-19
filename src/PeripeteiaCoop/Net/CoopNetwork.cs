@@ -47,6 +47,7 @@ internal sealed class CoopNetwork : IDisposable
         PlayerState = 23,
         ElevatorCall = 24,
         ElevatorState = 25,
+        ContainerLoot = 26,
     }
 
     [Flags]
@@ -62,7 +63,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 22;
+    private const int ProtocolVersion = 23;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
 
@@ -282,6 +283,7 @@ internal sealed class CoopNetwork : IDisposable
         _net.PollEvents();
         DoorSync.Tick();
         ElevatorSync.Tick();
+        ContainerSync.Tick();
         ItemSync.Tick(localPlayer != null ? localPlayer.transform : null);
         WeaponSync.Tick(localPlayer);
         CombatSync.Tick(localPlayer);
@@ -658,6 +660,49 @@ internal sealed class CoopNetwork : IDisposable
         writer.Put(rotation.y);
         writer.Put(rotation.z);
         writer.Put(rotation.w);
+    }
+
+    /// <summary>
+    /// Announces that an item left a loot container. A client sends this to the
+    /// host, which applies it and relays it to the other clients; the host sends
+    /// it straight to all clients when it takes the item itself.
+    /// </summary>
+    public void SendContainerLoot(string key, int index, string itemName)
+    {
+        if (_net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        writer.Put((byte)PacketType.ContainerLoot);
+        writer.Put(key);
+        writer.Put(index);
+        writer.Put(itemName ?? string.Empty);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+            return;
+        }
+
+        // A client has exactly one peer in a normal session: the host. Keep the
+        // selection deterministic in case discovery ever leaves more than one.
+        NetPeer? first = null;
+        foreach (NetPeer peer in _net.ConnectedPeerList)
+        {
+            if (peer == null)
+            {
+                continue;
+            }
+
+            if (first == null || peer.Id < first.Id)
+            {
+                first = peer;
+            }
+        }
+
+        first?.Send(writer, DeliveryMethod.ReliableOrdered);
     }
 
     public void SendItemState(
@@ -2305,6 +2350,10 @@ internal sealed class CoopNetwork : IDisposable
             case PacketType.ElevatorState:
                 ReceiveElevatorState(reader);
                 break;
+
+            case PacketType.ContainerLoot:
+                ReceiveContainerLoot(peer, reader);
+                break;
         }
     }
 
@@ -2913,6 +2962,34 @@ internal sealed class CoopNetwork : IDisposable
         );
 
         ElevatorSync.ApplyState(key, floorNo, position, rotation);
+    }
+
+    private void ReceiveContainerLoot(NetPeer peer, NetDataReader reader)
+    {
+        string key = reader.GetString();
+        int index = reader.GetInt();
+        string itemName = reader.GetString();
+
+        ContainerSync.ApplyLoot(key, index, itemName);
+
+        // The host relays a client's pickup so spectators and later clients stay
+        // in step too. ApplyLoot guards against the echo coming back.
+        if (_settings.Role == CoopRole.Host)
+        {
+            var relay = new NetDataWriter();
+            relay.Put((byte)PacketType.ContainerLoot);
+            relay.Put(key);
+            relay.Put(index);
+            relay.Put(itemName);
+
+            foreach (NetPeer other in _net.ConnectedPeerList)
+            {
+                if (other != null && other != peer)
+                {
+                    other.Send(relay, DeliveryMethod.ReliableOrdered);
+                }
+            }
+        }
     }
 
     private void ReceiveItemState(NetPeer peer, NetDataReader reader)

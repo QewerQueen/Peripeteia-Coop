@@ -33,6 +33,10 @@ param(
     [switch]$StoryScan,
     [switch]$SaveTest,
     [switch]$DeathTest,
+    [switch]$NpcDeathTest,
+    [switch]$ContainerScan,
+    [switch]$LootTest,
+    [switch]$LootTestClient,
     [switch]$ProceduralAnimation
 )
 
@@ -114,6 +118,19 @@ if ($DeathTest -and -not $NoCoop) {
 }
 if ($KeyTest -and -not $NoCoop) {
     $hostCoop += " -coop-key-test `"$KeyTest`""
+}
+if ($NpcDeathTest -and -not $NoCoop) {
+    $hostCoop += " -coop-npc-death-test"
+}
+if ($ContainerScan -and -not $NoCoop) {
+    $hostCoop += " -coop-container-scan"
+    $clientCoop += " -coop-container-scan"
+}
+if ($LootTest -and -not $NoCoop) {
+    $hostCoop += " -coop-loot-test"
+}
+if ($LootTestClient -and -not $NoCoop) {
+    $clientCoop += " -coop-loot-test-client"
 }
 if ($ProceduralAnimation -and -not $NoCoop) {
     $hostCoop += " -coop-procedural-animation"

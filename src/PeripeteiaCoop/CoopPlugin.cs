@@ -679,6 +679,8 @@ public sealed class CoopPlugin : BasePlugin
         TryPatch(typeof(ItemPickupEventPatch));
         TryPatch(typeof(ItemBottleBreakPatch));
         TryPatch(typeof(ItemGenericBreakPatch));
+        TryPatch(typeof(ContainerRemovePatch));
+        TryPatch(typeof(LootUIRemovePatch));
         TryPatch(typeof(WeaponFireSimplePatch));
         TryPatch(typeof(WeaponFireAtPointPatch));
         TryPatch(typeof(WeaponFireAtPointTriggerPatch));

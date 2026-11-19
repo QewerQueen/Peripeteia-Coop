@@ -26,6 +26,12 @@ public sealed class CoopRunner : MonoBehaviour
     private bool _deathTestDone;
     private int _deathTestPhase;
     private float _nextDeathTestTime;
+    private float _nextNpcDeathTestTime;
+    private int _npcDeathsForced;
+    private int _containerScanCount;
+    private float _nextContainerScanTime;
+    private float _nextLootTestTime;
+    private int _lootTests;
     private string _autosaveScene = string.Empty;
     private float _autosaveAt;
     private int _personalSaves;
@@ -55,6 +61,9 @@ public sealed class CoopRunner : MonoBehaviour
         TryKeyTest();
         TrySaveTest();
         TryDeathTest();
+        TryNpcDeathTest();
+        TryLootTest();
+        TryContainerScan();
         TryClientAutosave();
         CoopPlugin.Tick(_localPlayer);
     }
@@ -341,6 +350,262 @@ public sealed class CoopRunner : MonoBehaviour
 
             return;
         }
+    }
+
+    /// <summary>
+    /// Debug-only (-coop-npc-death-test): the host force-kills the nearest NPC
+    /// every few seconds, so a solo retest can prove that a death the client did
+    /// not deal itself still produces a corpse on the client. This is the case
+    /// the "NPC corpses never appear" report is about: when the client shoots an
+    /// NPC its own game also applies the damage locally, so its corpse appears by
+    /// accident, but a kill the host makes only reaches the client through the
+    /// network. Never enabled unless -coop-npc-death-test is passed.
+    /// </summary>
+    private void TryNpcDeathTest()
+    {
+        if (!CoopPlugin.Settings.NpcDeathTest || CoopPlugin.Settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < _nextNpcDeathTestTime)
+        {
+            return;
+        }
+
+        if (_localPlayer == null || !_localPlayer.isActiveAndEnabled)
+        {
+            return;
+        }
+
+        _nextNpcDeathTestTime = Time.unscaledTime + 12.0f;
+
+        EnemyController? nearest = null;
+        float best = float.MaxValue;
+        Vector3 origin = _localPlayer.transform.position;
+
+        foreach (EnemyController enemy in UnityEngine.Object.FindObjectsOfType<EnemyController>())
+        {
+            if (enemy == null || enemy.gameObject == null)
+            {
+                continue;
+            }
+
+            HealthScript? hp = enemy.health;
+            if (hp == null || hp.dead)
+            {
+                continue;
+            }
+
+            float distance;
+            try
+            {
+                distance = Vector3.Distance(origin, enemy.transform.position);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            if (distance < best)
+            {
+                best = distance;
+                nearest = enemy;
+            }
+        }
+
+        if (nearest == null)
+        {
+            return;
+        }
+
+        _npcDeathsForced++;
+        CoopPlugin.LogSource.LogInfo(
+            $"[test] npc death test #{_npcDeathsForced}: force-killing '{nearest.gameObject.name}' at {best:F1} m."
+        );
+
+        try
+        {
+            nearest.health?.ForceDeath();
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[test] npc death test failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    /// <summary>
+    /// Debug-only (-coop-loot-test): the host takes one item out of a corpse
+    /// container every few seconds, so a solo retest can prove that the other
+    /// machine loses the same item from the same corpse.
+    /// </summary>
+    private void TryLootTest()
+    {
+        bool clientDriven = CoopPlugin.Settings.LootTestClient;
+        if ((!CoopPlugin.Settings.LootTest && !clientDriven) ||
+            (clientDriven ? CoopPlugin.Settings.Role != CoopRole.Client : CoopPlugin.Settings.Role != CoopRole.Host))
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < _nextLootTestTime || _localPlayer == null)
+        {
+            return;
+        }
+
+        _nextLootTestTime = Time.unscaledTime + 9.0f;
+
+        try
+        {
+            foreach (container c in UnityEngine.Object.FindObjectsOfType<container>())
+            {
+                if (c == null || c.gameObject == null || c.isShop || c.attachedHealth == null)
+                {
+                    continue;
+                }
+
+                Il2CppSystem.Collections.Generic.List<ItemInfo>? items = c.objectsContained;
+                if (items == null || items.Count == 0)
+                {
+                    continue;
+                }
+
+                ItemInfo? item = items[0];
+                if (item == null || item.gameObject == null)
+                {
+                    continue;
+                }
+
+                _lootTests++;
+                CoopPlugin.LogSource.LogInfo(
+                    $"[test] loot test #{_lootTests}: removing first item from corpse '{BuildPath(c.transform)}'."
+                );
+                c.removeItem(item);
+                break;
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[test] loot test failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    /// <summary>
+    /// Debug-only (-coop-container-scan): dump every loot container in the loaded
+    /// scene with its contents, so the container sync can be designed against the
+    /// real object graph instead of a guess.
+    /// </summary>
+    private void TryContainerScan()
+    {
+        if (!CoopPlugin.Settings.ContainerScan)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < _nextContainerScanTime)
+        {
+            return;
+        }
+
+        if (_localPlayer == null || !_localPlayer.isActiveAndEnabled)
+        {
+            return;
+        }
+
+        _nextContainerScanTime = Time.unscaledTime + 8.0f;
+        _containerScanCount++;
+
+        try
+        {
+            container[] all = UnityEngine.Object.FindObjectsOfType<container>();
+            CoopPlugin.LogSource.LogInfo(
+                $"[test] container scan #{_containerScanCount}: {all.Length} container(s)."
+            );
+
+            int shown = 0;
+            foreach (container c in all)
+            {
+                if (c == null || c.gameObject == null)
+                {
+                    continue;
+                }
+
+                int objects = c.objects != null ? c.objects.Count : -1;
+                int contained = c.objectsContained != null ? c.objectsContained.Count : -1;
+                if (shown >= 40)
+                {
+                    continue;
+                }
+
+                shown++;
+                CoopPlugin.LogSource.LogInfo(
+                    $"[test]   container '{BuildPath(c.transform)}' active={c.gameObject.activeInHierarchy} " +
+                    $"objects={objects} contained={contained} looted={c.looted} shop={c.isShop} " +
+                    $"physical={c.physicalSpace} attachedHealth={c.attachedHealth != null} " +
+                    $"lootTransform={c.lootTransform != null}"
+                );
+
+                LogContainerItems(c.objects, "objects");
+                LogContainerItems(c.objectsContained, "contained");
+            }
+
+            LootUI? ui = UnityEngine.Object.FindObjectOfType<LootUI>();
+            if (ui != null)
+            {
+                CoopPlugin.LogSource.LogInfo(
+                    $"[test]   LootUI lootOn={ui.lootOn} onUi={ui.onUi} " +
+                    $"currentContainer='{(ui.currentContainer != null ? BuildPath(ui.currentContainer.transform) : "<null>")}' " +
+                    $"displayed={(ui.DisplayedItems != null ? ui.DisplayedItems.Count : -1)}"
+                );
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[test] container scan failed: {exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    private static void LogContainerItems(Il2CppSystem.Collections.Generic.List<ItemInfo>? items, string label)
+    {
+        if (items == null || items.Count == 0)
+        {
+            return;
+        }
+
+        for (int i = 0; i < items.Count && i < 12; i++)
+        {
+            ItemInfo? item = items[i];
+            if (item == null || item.gameObject == null)
+            {
+                CoopPlugin.LogSource.LogInfo($"[test]     {label}[{i}] = <destroyed>");
+                continue;
+            }
+
+            CoopPlugin.LogSource.LogInfo(
+                $"[test]     {label}[{i}] '{item.ItemName}' obj='{item.gameObject.name}' " +
+                $"active={item.gameObject.activeInHierarchy} grid={item.startGrid} " +
+                $"inScene={item.gameObject.scene.IsValid()}"
+            );
+        }
+    }
+
+    private static string BuildPath(Transform transform)
+    {
+        var builder = new System.Text.StringBuilder(120);
+        Transform? current = transform;
+        while (current != null)
+        {
+            builder.Insert(0, $"/{current.name}[{current.GetSiblingIndex()}]");
+            current = current.parent;
+        }
+
+        return builder.ToString();
     }
 
     /// <summary>

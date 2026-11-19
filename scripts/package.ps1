@@ -124,7 +124,8 @@ WHAT WORKS
   - A small teammate panel shows the other player's name, health bar and DOWN
     state (Player.TeammateHud).
   - Shared world: NPCs and enemies are mirrored host-authoritatively, and a kill
-    by either player counts for both.
+    by either player counts for both. Loot taken from crates and NPC corpses is
+    removed on the other machine too (shops stay personal).
   - One shared story branch: a one-time dialogue, quest object or scripted
     teleport is consumed by whichever player reaches it first, and the world
     changes it causes (doors, pistons, elevators, object toggles) are replayed

@@ -104,6 +104,32 @@ internal sealed class CoopSettings
     public string KeyTestName { get; private set; } = string.Empty;
 
     /// <summary>
+    /// Debug-only solo test mode: the host force-kills the nearest NPC every few
+    /// seconds, so a retest can prove that a death the client never dealt itself
+    /// still produces a corpse on the client (the "NPC corpses do not appear"
+    /// report). Never set unless -coop-npc-death-test is passed.
+    /// </summary>
+    public bool NpcDeathTest { get; private set; }
+
+    /// <summary>
+    /// Debug-only solo test mode: dump every loot container in the loaded scene
+    /// (corpses, crates, shops) with its item list, so the container sync can be
+    /// designed against the real object graph. Never set unless
+    /// -coop-container-scan is passed.
+    /// </summary>
+    public bool ContainerScan { get; private set; }
+
+    /// <summary>
+    /// Debug-only solo test mode: the host periodically takes one item out of a
+    /// corpse's container so a retest can prove the other machine loses the same
+    /// item. Never set unless -coop-loot-test is passed.
+    /// </summary>
+    public bool LootTest { get; private set; }
+
+    /// <summary>Debug-only: same as -coop-loot-test but driven by the client.</summary>
+    public bool LootTestClient { get; private set; }
+
+    /// <summary>
     /// Reconfigure the session at runtime, for the in-game "Peripeteia Coop"
     /// menu. The command line still works: it just calls these before the first
     /// frame. A session cannot change role once it is running.
@@ -255,6 +281,26 @@ internal sealed class CoopSettings
                     {
                         settings.KeyTestName = args[++i];
                     }
+                    break;
+
+                case "-coop-npc-death-test":
+                case "--coop-npc-death-test":
+                    settings.NpcDeathTest = true;
+                    break;
+
+                case "-coop-container-scan":
+                case "--coop-container-scan":
+                    settings.ContainerScan = true;
+                    break;
+
+                case "-coop-loot-test":
+                case "--coop-loot-test":
+                    settings.LootTest = true;
+                    break;
+
+                case "-coop-loot-test-client":
+                case "--coop-loot-test-client":
+                    settings.LootTestClient = true;
                     break;
             }
         }

@@ -132,7 +132,17 @@ internal static class EnemySync
 
         try
         {
-            return FrozenIds.Contains(enemy.GetInstanceID());
+            if (!FrozenIds.Contains(enemy.GetInstanceID()))
+            {
+                return false;
+            }
+
+            // A dead NPC is handed straight back to the game. The corpse ragdoll,
+            // the lootable body and the death cleanup are all driven by the game's
+            // own Update / LateUpdate; keeping them frozen left the client with no
+            // visible corpse (the ragdoll existed but nothing positioned it).
+            HealthScript? health = enemy.health;
+            return health == null || !health.dead;
         }
         catch (Exception)
         {
@@ -394,11 +404,21 @@ internal static class EnemySync
 
         if (enemy == null || enemy.gameObject == null)
         {
+            CoopPlugin.LogSource.LogWarning(
+                $"[ai] remote death for unknown key '{key}' (tracked={KnownEnemies.Count}, " +
+                $"scene='{_scene}'). The corpse will not appear on this machine."
+            );
             return;
         }
 
         HealthScript? health = enemy.health;
-        if (health == null || health.dead)
+        if (health == null)
+        {
+            CoopPlugin.LogSource.LogWarning($"[ai] remote death for '{key}' has no HealthScript.");
+            return;
+        }
+
+        if (health.dead)
         {
             return;
         }
@@ -407,13 +427,55 @@ internal static class EnemySync
         try
         {
             health.ForceDeath();
-            CoopPlugin.LogSource.LogInfo($"[ai] applied remote death key='{key}'.");
+
+            // Stop easing this actor's transform from the last snapshot: once the
+            // body is a ragdoll the network must leave it alone, otherwise the
+            // per-frame interpolation drags the corpse back to where the host
+            // last saw it standing and it never collapses.
+            Targets.Remove(key);
+            LastMirror.Remove(key);
+
+            CoopPlugin.LogSource.LogInfo(
+                $"[ai] applied remote death key='{key}' (dead={health.dead}, ragdoll={RagdollState(enemy)})."
+            );
         }
         catch (Exception exception)
         {
             CoopPlugin.LogSource.LogWarning(
                 $"[ai] ForceDeath failed for '{key}': {exception.GetType().Name}: {exception.Message}"
             );
+        }
+    }
+
+    /// <summary>
+    /// Short description of an enemy's ragdoll state, for the death diagnostics.
+    /// A corpse that never appears is almost always a ragdoll that never switched
+    /// on, so this tells the two cases apart in one log line.
+    /// </summary>
+    private static string RagdollState(EnemyController enemy)
+    {
+        try
+        {
+            HitBoxes? boxes = enemy.hitBoxes;
+            if (boxes == null)
+            {
+                return "no HitBoxes";
+            }
+
+            int bodies = 0;
+            foreach (Rigidbody body in enemy.GetComponentsInChildren<Rigidbody>(true))
+            {
+                if (body != null && !body.isKinematic)
+                {
+                    bodies++;
+                }
+            }
+
+            return $"HitBoxes.isRagdoll={boxes.isRagdoll}, simulated={bodies}";
+        }
+        catch (Exception exception)
+        {
+            return $"unreadable ({exception.GetType().Name})";
         }
     }
 
@@ -548,7 +610,15 @@ internal static class EnemySync
                 continue;
             }
 
+            // The body may be a ragdoll now; drop the mirror target so LateTick
+            // stops easing its transform back onto the last live snapshot.
+            Targets.Remove(pair.Key);
+            LastMirror.Remove(pair.Key);
+
             _deathsSent++;
+            CoopPlugin.LogSource.LogInfo(
+                $"[ai] sharing death of '{pair.Key}' (ragdoll={RagdollState(enemy)})."
+            );
             CoopPlugin.Network?.SendEnemyDeath(pair.Key);
         }
     }

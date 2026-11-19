@@ -110,7 +110,8 @@ Player
 - Типы сообщений (`PacketType`): `Hello` (1), `Welcome` (2), `Pose` (3),
   `DoorState` (4), `ItemState` (5), `WeaponState` (6), `WeaponEvent` (7),
   `Damage` (8), `ItemEvent` (9), `EnemyState` (10), `EnemyDeath` (11),
-  `StoryEvent` (12), `PlayerDeath` (13). Текущая версия протокола — 16.
+  `StoryEvent` (12), `PlayerDeath` (13). Текущая версия протокола — 23
+  (последние добавленные типы — `ElevatorCall`/`ElevatorState` и `ContainerLoot`).
 - `Hello` — протокол, версия мода, версия игры, имя клиента; `Welcome` — id +
   те же версии + имя хоста.
 - Несовпадение версии протокола/мода/игры — отказ и disconnect.
