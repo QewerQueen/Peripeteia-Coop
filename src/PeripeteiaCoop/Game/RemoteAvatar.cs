@@ -250,6 +250,14 @@ internal sealed class RemoteAvatar
     /// </summary>
     public bool HasLanded { get; private set; }
 
+    /// <summary>
+    /// True while the latest pose says the remote player is standing on the
+    /// ground. Unlike <see cref="HasLanded"/> this is not latched, so the client
+    /// can wait for the host to actually be on solid ground before moving next
+    /// to them.
+    /// </summary>
+    public bool IsGrounded { get; private set; }
+
     public string PoseScene { get; private set; } = string.Empty;
 
     public string RemoteScene { get; private set; } = string.Empty;
@@ -266,6 +274,7 @@ internal sealed class RemoteAvatar
         TargetPosition = position;
         TargetYaw = yaw;
         HasPose = true;
+        IsGrounded = grounded;
         if (grounded)
         {
             HasLanded = true;

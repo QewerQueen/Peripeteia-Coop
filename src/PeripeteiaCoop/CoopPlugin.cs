@@ -120,6 +120,8 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool AutoStartDownloadedSave { get; private set; } = true;
 
+    internal static bool SpawnNearHost { get; private set; } = true;
+
     internal static bool ClientKeepPersonalInventory { get; private set; } = true;
 
     internal static string DefaultPlayerName { get; private set; } = string.Empty;
@@ -504,6 +506,13 @@ public sealed class CoopPlugin : BasePlugin
             "AutoStartDownloadedSave",
             true,
             "Client only: after the host's save has been downloaded, start the run from it automatically instead of waiting for the player to open the game's load menu. Only happens while the client is still on the main menu."
+        ).Value;
+
+        SpawnNearHost = Config.Bind(
+            "Net",
+            "SpawnNearHost",
+            true,
+            "Client only: on connect (and on entering a new level) put this player next to the host instead of at the save point. The game drops a freshly loaded player at a temporary spawn point high above the map and then lets it fall, so without this the client would start far away from the host. Turn off to always start at the save point."
         ).Value;
 
         DefaultPlayerName = Config.Bind(

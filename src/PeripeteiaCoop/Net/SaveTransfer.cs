@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using LiteNetLib;
 using UnityEngine;
 
 namespace PeripeteiaCoop;
@@ -66,6 +67,7 @@ internal static class SaveTransfer
     private static int _outIndex;
     private static int _outOffset;
     private static bool _sending;
+    private static NetPeer? _targetPeer;
 
     private static string _inName = string.Empty;
     private static List<InFile>? _inFiles;
@@ -103,17 +105,22 @@ internal static class SaveTransfer
     // Host
     // ------------------------------------------------------------------
 
-    /// <summary>A client asked for the save; start streaming the newest one.</summary>
-    public static void OnSaveRequested()
+    /// <summary>
+    /// A client asked for the save; start streaming the newest one to that client
+    /// only. Sending it to every peer would make the whole party re-download and
+    /// restart the run whenever one of them (re)joins.
+    /// </summary>
+    public static void OnSaveRequested(NetPeer peer)
     {
         OutFiles.Clear();
         _sending = false;
+        _targetPeer = peer;
 
         string? directory = FindLatestSaveDirectory();
         if (directory == null)
         {
             CoopPlugin.LogSource.LogWarning("[save] host has no save to send.");
-            CoopPlugin.Network?.SendSaveManifest(string.Empty, Array.Empty<string>(), Array.Empty<int>());
+            CoopPlugin.Network?.SendSaveManifest(string.Empty, Array.Empty<string>(), Array.Empty<int>(), peer);
             return;
         }
 
@@ -157,7 +164,7 @@ internal static class SaveTransfer
         CoopPlugin.LogSource.LogInfo(
             $"[save] sending save '{_outName}' to the client ({OutFiles.Count} files, {total} bytes)."
         );
-        CoopPlugin.Network?.SendSaveManifest(_outName, rels, sizes);
+        CoopPlugin.Network?.SendSaveManifest(_outName, rels, sizes, _targetPeer);
     }
 
     /// <summary>Host pump: push the next slice of the save.</summary>
@@ -165,6 +172,15 @@ internal static class SaveTransfer
     {
         if (!_sending)
         {
+            return;
+        }
+
+        // The requesting client may have dropped; stop rather than stream into
+        // the void (and never fall back to sending it to everyone).
+        if (_targetPeer == null || _targetPeer.ConnectionState != ConnectionState.Connected)
+        {
+            _sending = false;
+            _targetPeer = null;
             return;
         }
 
@@ -182,7 +198,7 @@ internal static class SaveTransfer
             int length = Math.Min(ChunkSize, file.Data.Length - _outOffset);
             byte[] chunk = new byte[length];
             Buffer.BlockCopy(file.Data, _outOffset, chunk, 0, length);
-            CoopPlugin.Network?.SendSaveChunk(_outIndex, _outOffset, chunk);
+            CoopPlugin.Network?.SendSaveChunk(_outIndex, _outOffset, chunk, _targetPeer);
             _outOffset += length;
             budget -= length;
         }
@@ -190,7 +206,8 @@ internal static class SaveTransfer
         if (_outIndex >= OutFiles.Count)
         {
             _sending = false;
-            CoopPlugin.Network?.SendSaveDone();
+            CoopPlugin.Network?.SendSaveDone(_targetPeer);
+            _targetPeer = null;
             CoopPlugin.LogSource.LogInfo($"[save] finished sending save '{_outName}'.");
         }
     }

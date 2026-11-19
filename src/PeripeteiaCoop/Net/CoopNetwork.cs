@@ -73,6 +73,13 @@ internal sealed class CoopNetwork : IDisposable
     // still touching the corpse every frame.
     private const float DefaultDragHold = 1.8f;
 
+    // Client join: for this long after the client enters the host's level, keep
+    // pulling it next to the host whenever its own save load has dropped the body
+    // far away (or left it falling out of the world). Normal movement inside the
+    // radius is never touched.
+    private const float SpawnNearHostWindow = 20.0f;
+    private const float SpawnNearHostRadius = 12.0f;
+
     private readonly CoopSettings _settings;
     private readonly EventBasedNetListener _listener;
     private readonly NetManager _net;
@@ -101,6 +108,10 @@ internal sealed class CoopNetwork : IDisposable
     private float _nextAutopilotTime;
     private float _nextHuntLog;
     private float _nextShootTime;
+    private string _spawnNearHostScene = string.Empty;
+    private bool _spawnNearHostDone;
+    private float _spawnNearHostDeadline;
+    private float _nextSpawnNearHostMove;
     private PlayerMovement? _localPlayer;
     private ObjectHighlight? _localHighlight;
 
@@ -337,6 +348,7 @@ internal sealed class CoopNetwork : IDisposable
         }
 
         ApplyAutoPilot(localPlayer);
+        ApplyJoinSpawn(localPlayer);
         SceneSync.MaybeRunTest(localPlayer != null && ConnectedPeersCount > 0);
 
         if (localPlayer != null)
@@ -1639,6 +1651,119 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     /// <summary>
+    /// Client only: after joining - and again after every level change - put this
+    /// player next to the host instead of at the save point.
+    ///
+    /// The game drops a freshly loaded player at a temporary spawn point high
+    /// above the map and then lets it fall to the real position, so a client that
+    /// joins a running session used to start far away from (or in mid-air above)
+    /// the host. Moving the client onto the host makes the two of them start
+    /// together. Runs once per level, and only while the host is actually
+    /// standing on solid ground so the client is never dropped in the air.
+    /// </summary>
+    private void ApplyJoinSpawn(PlayerMovement? localPlayer)
+    {
+        if (!CoopPlugin.SpawnNearHost ||
+            _settings.Role != CoopRole.Client ||
+            localPlayer == null ||
+            !IsLocalPlayerReady(localPlayer))
+        {
+            return;
+        }
+
+        string scene = localPlayer.gameObject.scene.name;
+        if (!string.Equals(scene, _spawnNearHostScene, StringComparison.Ordinal))
+        {
+            // A new level: the client should appear next to the host here too.
+            _spawnNearHostScene = scene;
+            _spawnNearHostDone = false;
+            _spawnNearHostDeadline = Time.unscaledTime + SpawnNearHostWindow;
+            _nextSpawnNearHostMove = 0.0f;
+        }
+
+        if (_spawnNearHostDone || DeathRespawn.IsRespawning)
+        {
+            return;
+        }
+
+        RemoteAvatar? host = Teammate;
+        if (host == null ||
+            !host.HasPose ||
+            !host.HasLanded ||
+            !host.IsGrounded ||
+            !string.Equals(host.PoseScene, scene, StringComparison.Ordinal) ||
+            !string.Equals(host.RemoteScene, scene, StringComparison.Ordinal))
+        {
+            // The host's live pose in this level is not known yet, or the host is
+            // airborne right now; wait instead of dropping the player in mid-air.
+            return;
+        }
+
+        Vector3 target = host.TargetPosition + SpawnOffset(host.TargetYaw);
+        float distance = Vector3.Distance(localPlayer.transform.position, target);
+        if (distance <= SpawnNearHostRadius)
+        {
+            // Already next to the host: nothing to do, but keep watching for the
+            // moment the client's own save load re-places the body.
+            return;
+        }
+
+        if (Time.unscaledTime < _nextSpawnNearHostMove)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime >= _spawnNearHostDeadline)
+        {
+            _spawnNearHostDone = true;
+            CoopPlugin.LogSource.LogInfo(
+                $"[spawn] gave up pulling the client to the host after " +
+                $"{SpawnNearHostWindow:F0}s ({distance:F1} m away)."
+            );
+            return;
+        }
+
+        _nextSpawnNearHostMove = Time.unscaledTime + 0.4f;
+        TeleportLocalPlayer(localPlayer, target);
+
+        // The game records its level-start save point before this move, so a death
+        // would otherwise send the client back to the temporary spawn it started
+        // on. Re-read it from the spot the client actually joined at.
+        DeathRespawn.RecordSavePoint("co-op join");
+
+        CoopPlugin.LogSource.LogInfo(
+            $"[spawn] moved the client next to the host at {target} " +
+            $"(host at {host.TargetPosition}, was {distance:F1} m away, grounded={localPlayer.IsOnGround})."
+        );
+    }
+
+    private static void TeleportLocalPlayer(PlayerMovement localPlayer, Vector3 target)
+    {
+        try
+        {
+            localPlayer.TeleportPlayer(target, true);
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[spawn] TeleportPlayer failed ({exception.GetType().Name}: " +
+                $"{exception.Message}); moving the transform instead."
+            );
+            localPlayer.transform.position = target;
+        }
+    }
+
+    /// <summary>
+    /// A spot a little to the host's side, so the two bodies do not spawn inside
+    /// one another and get pushed apart.
+    /// </summary>
+    private static Vector3 SpawnOffset(float yaw)
+    {
+        float radians = yaw * Mathf.Deg2Rad;
+        return new Vector3(Mathf.Cos(radians) * 1.2f, 0.0f, -Mathf.Sin(radians) * 1.2f);
+    }
+
+    /// <summary>
     /// Debug-only solo test mode (-coop-autopilot-hunt). On the host it walks the
     /// host player to the nearest hostile enemy; on the client it follows the host
     /// avatar. Keeping both players together is the point: the host only simulates
@@ -2219,7 +2344,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     /// <summary>Host only: announces the save about to be streamed.</summary>
-    public void SendSaveManifest(string name, string[] rels, int[] sizes)
+    public void SendSaveManifest(string name, string[] rels, int[] sizes, NetPeer? target = null)
     {
         if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
         {
@@ -2237,11 +2362,11 @@ internal sealed class CoopNetwork : IDisposable
             writer.Put(sizes[i]);
         }
 
-        _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+        SendSavePacket(writer, target);
     }
 
     /// <summary>Host only: one slice of one save file.</summary>
-    public void SendSaveChunk(int index, int offset, byte[] data)
+    public void SendSaveChunk(int index, int offset, byte[] data, NetPeer? target = null)
     {
         if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
         {
@@ -2253,11 +2378,11 @@ internal sealed class CoopNetwork : IDisposable
         writer.Put(index);
         writer.Put(offset);
         writer.Put(data);
-        _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+        SendSavePacket(writer, target);
     }
 
     /// <summary>Host only: the save has been fully streamed.</summary>
-    public void SendSaveDone()
+    public void SendSaveDone(NetPeer? target = null)
     {
         if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
         {
@@ -2266,6 +2391,21 @@ internal sealed class CoopNetwork : IDisposable
 
         var writer = new NetDataWriter();
         writer.Put((byte)PacketType.SaveDone);
+        SendSavePacket(writer, target);
+    }
+
+    /// <summary>
+    /// Host only: the save stream goes to the one client that asked for it. The
+    /// target is only null for the no-save warning, which is harmless to broadcast.
+    /// </summary>
+    private void SendSavePacket(NetDataWriter writer, NetPeer? target)
+    {
+        if (target != null && target.ConnectionState == ConnectionState.Connected)
+        {
+            target.Send(writer, DeliveryMethod.ReliableOrdered);
+            return;
+        }
+
         _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
     }
 
@@ -2276,7 +2416,7 @@ internal sealed class CoopNetwork : IDisposable
             return;
         }
 
-        SaveTransfer.OnSaveRequested();
+        SaveTransfer.OnSaveRequested(peer);
     }
 
     private void ReceiveSaveManifest(NetDataReader reader)
