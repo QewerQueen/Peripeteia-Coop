@@ -72,7 +72,8 @@ $Strings = @{
         downloaded    = "Скачано {0} МБ за {1} с. Проверяю контрольную сумму..."
         downloadProg  = "  {0,3}%  {1,5:N1} / {2:N1} МБ"
         downloadFail  = "Не удалось скачать BepInEx: {0}"
-        downloadHint  = "Проверь интернет. Либо положи рядом с установщиком файл BepInEx-Unity.IL2CPP-win-x64-*.zip и запусти снова."
+        downloadRetry = "Скачать не удалось, пробую ещё раз ({0}/2)..."
+        downloadHint  = "Проверь интернет: сайт builds.bepinex.dev бывает недоступен. Скачай вручную файл {0} и положи его рядом с Install.bat или в папку Загрузки, затем запусти установщик снова."
         usingLocal    = "Использую локальный архив BepInEx: {0}"
         hashBad       = "Контрольная сумма BepInEx не совпала (ожидалось {0}). Установка остановлена ради безопасности."
         extracting    = "Распаковываю BepInEx в папку игры..."
@@ -109,7 +110,8 @@ $Strings = @{
         downloaded    = "Downloaded {0} MB in {1} s. Verifying the checksum..."
         downloadProg  = "  {0,3}%  {1,5:N1} / {2:N1} MB"
         downloadFail  = "Could not download BepInEx: {0}"
-        downloadHint  = "Check your connection. Or put a BepInEx-Unity.IL2CPP-win-x64-*.zip next to the installer and run it again."
+        downloadRetry = "Download failed, retrying ({0}/2)..."
+        downloadHint  = "Check your connection: builds.bepinex.dev is sometimes unreachable. Download {0} by hand and put it next to Install.bat or in your Downloads folder, then run the installer again."
         usingLocal    = "Using the local BepInEx archive: {0}"
         hashBad       = "The BepInEx checksum did not match (expected {0}). Stopping the install for safety."
         extracting    = "Extracting BepInEx into the game folder..."
@@ -308,10 +310,20 @@ function Get-BepInExVersion([string]$game) {
 }
 
 function Get-LocalBepInExArchive {
-    foreach ($dir in @($ScriptDir, (Join-Path $RepoRoot "tools"), (Join-Path $RepoRoot "local"))) {
+    # Look next to the installer first, then in the usual download spots, so a
+    # player whose network cannot reach builds.bepinex.dev can just drop the
+    # archive anywhere obvious (or leave it in Downloads) and run the installer.
+    $dirs = @(
+        $ScriptDir,
+        (Join-Path $RepoRoot "tools"),
+        (Join-Path $RepoRoot "local"),
+        (Join-Path $env:USERPROFILE "Downloads"),
+        (Join-Path $env:USERPROFILE "Desktop")
+    )
+    foreach ($dir in $dirs) {
         if (-not (Test-Path -LiteralPath $dir)) { continue }
         $match = Get-ChildItem -LiteralPath $dir -Filter "BepInEx-Unity.IL2CPP-win-x64-*.zip" -File -ErrorAction SilentlyContinue |
-                 Sort-Object Name -Descending | Select-Object -First 1
+                 Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if ($match) { return $match.FullName }
     }
     return $null
@@ -325,8 +337,10 @@ function Get-LocalBepInExArchive {
 function Save-RemoteFile([string]$url, [string]$path, [string]$progressFormat) {
     $request = [System.Net.HttpWebRequest]::Create($url)
     $request.UserAgent = "PeripeteiaCoop-Installer"
-    $request.Timeout = 600000
-    $request.ReadWriteTimeout = 600000
+    # Fail within a minute when the server cannot be reached at all, but allow
+    # up to two minutes between reads once the transfer is running.
+    $request.Timeout = 60000
+    $request.ReadWriteTimeout = 120000
 
     $response = $null
     $input = $null
@@ -376,13 +390,23 @@ function Install-BepInEx([string]$game) {
         $zip = Join-Path $env:TEMP ("PeripeteiaCoop-BepInEx-" + [guid]::NewGuid().ToString("N") + ".zip")
         Step ((T 'downloading'))
         $started = Get-Date
-        try {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            Save-RemoteFile -url $BepInExUrl -path $zip -progressFormat (T 'downloadProg')
-        } catch {
-            Fail ((T 'downloadFail') -f $_.Exception.Message)
-            Warn (T 'downloadHint')
-            Pause-Exit 1
+        $attempt = 0
+        while ($true) {
+            $attempt++
+            try {
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                Save-RemoteFile -url $BepInExUrl -path $zip -progressFormat (T 'downloadProg')
+                break
+            } catch {
+                Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+                if ($attempt -ge 2) {
+                    Fail ((T 'downloadFail') -f $_.Exception.Message)
+                    Warn ((T 'downloadHint') -f "BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.793.zip")
+                    Warn ("  " + $BepInExUrl)
+                    Pause-Exit 1
+                }
+                Warn ((T 'downloadRetry') -f $attempt)
+            }
         }
 
         $mb  = [math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
