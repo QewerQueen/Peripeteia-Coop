@@ -40,14 +40,15 @@ You do not need to build anything or touch a command line.
    libraries, including extra drives, and common paths) and only asks for the
    folder if it cannot.
 4. It installs BepInEx 6 (IL2CPP win-x64) at the exact tested version if it is
-   missing, verifies it by SHA256, copies the mod and opens `COOP-README.html`
-   with the next steps.
+   missing, verifies it by SHA256, pre-seeds the Unity 2021.3.11 libraries,
+   copies the mod and opens `COOP-README.html` with the next steps.
 5. Launch the game, click **COOP** in the main menu, then **Host game** or pick
    a host from the list.
 
-The installer needs internet once to download BepInEx (~33 MB). For an offline
-install, put a `BepInEx-Unity.IL2CPP-win-x64-*.zip` next to `Install.bat` and
-it is used instead of downloading.
+The release archive includes both offline dependencies — the pinned BepInEx
+archive and `2021.3.11.zip` — so **no internet is needed to install**. The
+installer uses the copies next to `Install.bat` and only downloads anything if
+you deliberately remove them. It does not send any information about you.
 
 ## Requirements
 
@@ -159,15 +160,16 @@ step-by-step guide below.
 2. Дважды кликни **`Install.bat`**.
 3. Выбери язык. Установщик сам находит Peripeteia (библиотеки Steam, включая
    другие диски, и типовые пути); если не нашёл — попросит указать папку.
-4. Если BepInEx 6 (IL2CPP win-x64) ещё не установлен, установщик скачает именно
-   протестированную версию, проверит её по SHA256, скопирует мод и откроет
-   `COOP-README.html` со следующими шагами.
+4. Если BepInEx 6 (IL2CPP win-x64) ещё не установлен, установщик возьмёт именно
+   протестированную версию из архива, проверит её по SHA256, положит библиотеки
+   Unity 2021.3.11, скопирует мод и откроет `COOP-README.html`.
 5. Запусти игру, в главном меню нажми **COOP**, затем **Host game** или выбери
    хост из списка.
 
-Интернет нужен один раз — чтобы скачать BepInEx (~33 МБ). Для установки офлайн
-положи рядом с `Install.bat` файл `BepInEx-Unity.IL2CPP-win-x64-*.zip`, и он
-будет использован вместо скачивания.
+**Интернет для установки не нужен:** в архиве уже лежат проверенный архив
+BepInEx и `2021.3.11.zip`. Установщик берёт их из папки рядом с `Install.bat`
+и скачивает что-то только если вы эти файлы удалили. О вас он ничего не
+отправляет.
 
 Демо-версия (`Peripeteia Demo`) тоже поддерживается — установщик находит её сам,
 и мод тот же. Но строка версии игры у демо другая (`Demo` против `Metanoia`),
@@ -595,11 +597,12 @@ with BepInEx. The build references them from `BepInEx/interop`.
 
 This builds `artifacts/PeripeteiaCoop-<version>.zip`. The archive contains the two
 plugin DLLs, a default `peripeteia.coop.cfg`, the one-click installer
-(`Install.bat`, `install.ps1`, `COOP-README.html`), install notes and user docs.
-On first run the installer downloads a pinned BepInEx 6 build (verified by
-SHA256) unless BepInEx is already installed. The GitHub/publishing checklist
-(personal data scan, version pinning, release steps) is in
-[docs/PUBLISHING.md](docs/PUBLISHING.md).
+(`Install.bat`, `install.ps1`, `COOP-README.html`), install notes, user docs and
+two offline dependency archives: the pinned BepInEx 6 build and
+`2021.3.11.zip` for its Unity libraries. `package.ps1` expects both archives in
+`tools/` (see [docs/PUBLISHING.md](docs/PUBLISHING.md)); the release is fully
+installable offline. The GitHub/publishing checklist (personal data scan,
+version pinning, release steps) is in [docs/PUBLISHING.md](docs/PUBLISHING.md).
 
 ## Legal
 

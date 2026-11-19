@@ -86,7 +86,7 @@ git grep -n -I -E "[A-Z]:\\\\Users|[A-Z]:\\\\SteamLibrary|AppData|<your-user-nam
 | Unity | `2021.3.11f1`, IL2CPP x64 |
 | BepInEx | `6.0.0-be.793+dbc82f0` (bleeding edge, IL2CPP) |
 | LiteNetLib | `1.3.5` |
-| Мод | `0.7.30` |
+| Мод | `0.7.31` |
 | Протокол | `23` |
 
 Демо-версия (`Peripeteia Demo`, строка версии игры `Demo`) поддерживается тем же
@@ -166,7 +166,9 @@ PowerShell 5.1 читает файл без BOM как ANSI, из-за чего 
 
 5. В GitHub Release:
 
-   - приложи ZIP из `artifacts/`;
+   - приложи ZIP из `artifacts/` (внутри уже есть `2021.3.11.zip` и
+     `BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.793.zip` — не выкладывай их
+     отдельно чтобы не дублировать скачивание);
    - укажи SHA256 (печатает `package.ps1`);
    - перечисли ограничения: инвентарь и патроны у каждого свои (обмен — только
      через намеренно выброшенный предмет); сырой прогресс узлов VIDE не
@@ -179,9 +181,18 @@ PowerShell 5.1 читает файл без BOM как ANSI, из-за чего 
 
 - Код мода — MIT (`LICENSE`).
 - LiteNetLib — MIT, укажи в `THIRD_PARTY_NOTICES.txt`.
-- BepInEx не входит в архив. `Install.bat` скачивает зафиксированную версию
-  (`6.0.0-be.793+dbc82f0`) с <https://builds.bepinex.dev> и проверяет её по
-  SHA256 перед установкой. BepInEx распространяется под LGPL-2.1.
+- BepInEx **входит в архив релиза** как офлайн-копия
+  `BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.793.zip` (сборка
+  `6.0.0-be.793+dbc82f0`, SHA256
+  `5B63D7D0E92A2448CCD13B738FF95FF1CC1026C6D718555D4DF8E6C824953AC4`).
+  Установщик проверяет архив по SHA256 перед распаковкой и скачивает файл с
+  <https://builds.bepinex.dev> только если локальной копии нет.
+  BepInEx распространяется под LGPL-2.1.
+- `2021.3.11.zip` с базовыми библиотеками Unity тоже входит в архив. Установщик
+  кладёт его в `BepInEx\unity-libs`, поэтому BepInEx не скачивает его при первом
+  запуске. Источник: <https://unity.bepinex.dev/libraries/2021.3.11.zip>.
+- Оба архива должны лежать в `tools/` при сборке релиза (там они git-ignored).
+  `scripts/package.ps1` откажется собирать архив без них.
 - Не выкладывай ассеты, модели, звуки, `GameAssembly.dll`,
   `Assembly-CSharp.dll`, interop-сборки и дампы.
 - Проект неофициальный и не связан с Ninth Exodus.

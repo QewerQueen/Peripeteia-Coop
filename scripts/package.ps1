@@ -7,6 +7,8 @@
       Install.bat
       install.ps1
       COOP-README.html
+      BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.793.zip
+      2021.3.11.zip
       BepInEx/plugins/PeripeteiaCoop/PeripeteiaCoop.dll
       BepInEx/plugins/PeripeteiaCoop/LiteNetLib.dll
       BepInEx/config/peripeteia.coop.cfg
@@ -20,6 +22,8 @@
     finds the game, installs BepInEx 6 (pinned version, downloaded and verified)
     if needed, copies the mod and opens COOP-README.html with the next steps.
 
+    The two archives are pinned, hash-verified third-party binaries from tools/;
+    having them at the archive root makes the installer work without internet.
     It never includes game files, interop assemblies, logs, saves, dumps or
     local paths. Build first with scripts/setup.ps1 and scripts/build.ps1.
 
@@ -86,6 +90,20 @@ foreach ($file in @("Install.bat", "install.ps1", "COOP-README.html")) {
     Copy-Item -LiteralPath $source -Destination $stage
 }
 
+# Offline dependencies. install.ps1 looks for both archives next to itself, so
+# shipping them at the archive root removes the first-launch download entirely.
+$offlineArchives = @(
+    "BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.793.zip",
+    "2021.3.11.zip"
+)
+foreach ($name in $offlineArchives) {
+    $source = Join-Path $root "tools\$name"
+    if (-not (Test-Path -LiteralPath $source)) {
+        throw "Missing offline dependency '$name' in tools/. See docs/PUBLISHING.md."
+    }
+    Copy-Item -LiteralPath $source -Destination $stage
+}
+
 $install = @"
 Peripeteia Coop $version (experimental)
 
@@ -93,8 +111,8 @@ REQUIREMENTS
   - Windows 10/11 x64
   - A legally owned copy of Peripeteia (Unity 2021.3.11f1, IL2CPP, x64)
   - Both players must use the same game version and the same mod version
-  - Internet for the first install (the installer downloads BepInEx once).
-    Offline: put a BepInEx-Unity.IL2CPP-win-x64-*.zip next to Install.bat.
+  - No internet needed: the archive includes the pinned BepInEx build and the
+    Unity 2021.3.11 base libraries. The installer uses those local copies.
 
 QUICK INSTALL (recommended)
   1. Extract this archive anywhere (not into the game folder).
@@ -138,6 +156,8 @@ WHAT WORKS
 NOTES
   - Inventory, money, health and ammo are personal per player. A co-op client
     keeps its own copy of the host save as 'Coop - <name>' and can play alone.
+  - The installer never uploads anything. It finds the game folder locally and
+    uses the two archives from this package, so installing works offline.
   - Internet play needs UDP port 7777 forwarded, or a VPN mesh such as
     RadminVPN/ZeroTier/Tailscale. The game has no Steam P2P networking. The COOP
     panel has a "Connect by IP" field, and the host beacon is also sent to each
@@ -159,10 +179,15 @@ LiteNetLib 1.3.5
   MIT License
   https://github.com/RevenantX/LiteNetLib
 
-BepInEx 6 (IL2CPP) is not bundled with this mod. Install.bat downloads a
-pinned, tested build from https://builds.bepinex.dev and verifies it with
-SHA256 before installing it. BepInEx is licensed under LGPL-2.1:
+BepInEx 6 (IL2CPP) is included as a pinned, tested offline archive
+(BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.793.zip, build 6.0.0-be.793+dbc82f0,
+SHA256 5B63D7D0E92A2448CCD13B738FF95FF1CC1026C6D718555D4DF8E6C824953AC4)
+so the installer does not need internet. BepInEx is licensed under LGPL-2.1:
   https://github.com/BepInEx/BepInEx/blob/master/LICENSE
+
+Unity 2021.3.11 base libraries (2021.3.11.zip) are included so BepInEx does
+not download them on first launch. They are redistributed from
+https://unity.bepinex.dev/libraries/2021.3.11.zip under Unity's license.
 
 Peripeteia and its assets belong to their respective owners.
 "@
