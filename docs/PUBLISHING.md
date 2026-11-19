@@ -86,7 +86,7 @@ git grep -n -I -E "[A-Z]:\\\\Users|[A-Z]:\\\\SteamLibrary|AppData|<your-user-nam
 | Unity | `2021.3.11f1`, IL2CPP x64 |
 | BepInEx | `6.0.0-be.793+dbc82f0` (bleeding edge, IL2CPP) |
 | LiteNetLib | `1.3.5` |
-| Мод | `0.7.26` |
+| Мод | `0.7.27` |
 | Протокол | `23` |
 
 Демо-версия (`Peripeteia Demo`, строка версии игры `Demo`) поддерживается тем же

@@ -31,6 +31,15 @@ internal sealed class RemoteAvatar
     // keeps the existing clone unless the set of parts really changed.
     private string[]? _sourceRootChildren;
 
+    // The game builds a spawned body over several frames. A clone taken from a
+    // half-built body keeps the missing limbs forever, which was visible after a
+    // rejoin or a save load (scene change forces a rebuild). Remember how many
+    // body renderers the clone was made from; if the live body later gains parts,
+    // the puppet is stale and has to be rebuilt from it.
+    private int _bodyRendererCount = -1;
+    private float _bodyIncompleteSince;
+    private bool _bodyIncompleteLogged;
+
     private float _nextRefreshTime;
     private Animator? _gameAnimator;
 
@@ -223,6 +232,7 @@ internal sealed class RemoteAvatar
         _source = cloned ? source : null;
         _sourceScene = cloned && source != null ? source.gameObject.scene.name : string.Empty;
         _sourceRootChildren = cloned && source != null ? RootChildNames(source) : null;
+        _bodyRendererCount = cloned && source != null ? CountBodyRenderers(source) : -1;
         Root.transform.position = position;
         Root.transform.rotation = Quaternion.Euler(0.0f, yaw, 0.0f);
 
@@ -416,9 +426,47 @@ internal sealed class RemoteAvatar
 
         bool sceneChanged = !string.Equals(_sourceScene, sceneName, StringComparison.Ordinal);
         bool sourceChanged = _source != source;
-        if (!_usingFallback && !sceneChanged && !sourceChanged)
+
+        // A body spawned by a save load or a rejoin is assembled over several
+        // frames. Cloning it before Skelly/UpperMesh exist left the teammate
+        // visually missing limbs, and a same-scene source swap never corrected
+        // it. Wait for a whole body (but do not wait forever if the build is
+        // unusual), and rebuild if the live body gains parts after cloning.
+        int liveBodyRenderers = CountBodyRenderers(source);
+        bool bodyRootsPresent = HasBodyVisualRoots(source);
+        bool bodyGrew = !_usingFallback && _bodyRendererCount >= 0 &&
+                        liveBodyRenderers >= _bodyRendererCount + 2;
+
+        if (!bodyRootsPresent)
+        {
+            if (!_bodyIncompleteLogged)
+            {
+                _bodyIncompleteSince = Time.unscaledTime;
+                _bodyIncompleteLogged = true;
+                CoopPlugin.LogSource.LogInfo(
+                    $"[avatar] deferring avatar id={Id}: the local body is still missing " +
+                    $"its visual roots (renderers={liveBodyRenderers})."
+                );
+            }
+
+            if (Time.unscaledTime - _bodyIncompleteSince < 5.0f)
+            {
+                _nextRefreshTime = Time.unscaledTime + 0.25f;
+                return;
+            }
+        }
+
+        if (!_usingFallback && !bodyGrew && !sceneChanged && !sourceChanged)
         {
             return;
+        }
+
+        if (bodyGrew)
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[avatar] rebuilding avatar id={Id}: the local body gained parts " +
+                $"({_bodyRendererCount} -> {liveBodyRenderers})."
+            );
         }
 
         // A same-scene body swap is the local player's respawn: the game replaces
@@ -434,7 +482,7 @@ internal sealed class RemoteAvatar
         // and rebuild the puppet from a half-initialised body. Compare against
         // the recorded part list instead.
         bool hadParts = _sourceRootChildren != null && _sourceRootChildren.Length > 0;
-        if (!_usingFallback && !sceneChanged && sourceChanged && hadParts &&
+        if (!_usingFallback && !bodyGrew && !sceneChanged && sourceChanged && hadParts &&
             !HasUnseenRootChildren(source))
         {
             _nextRefreshTime = Time.unscaledTime + 1.0f;
@@ -472,6 +520,8 @@ internal sealed class RemoteAvatar
             _source = source;
             _sourceScene = sceneName;
             _sourceRootChildren = RootChildNames(source);
+            _bodyRendererCount = liveBodyRenderers;
+            _bodyIncompleteLogged = false;
 
             // The old weapon visual was a child of the old root and has just
             // been destroyed with it. Recreate it from the last state packet.
@@ -515,6 +565,51 @@ internal sealed class RemoteAvatar
     {
         return !string.IsNullOrEmpty(sceneName) &&
                sceneName.IndexOf("menu", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    /// <summary>The two visual roots a whole player body always carries.</summary>
+    private static readonly string[] BodyVisualRoots = { "UpperMesh", "Skelly" };
+
+    /// <summary>
+    /// True when the source body already has the visual roots used by the clone.
+    /// A freshly spawned body can be missing Skelly (the ragdoll/skeleton root)
+    /// for a few frames; cloning it produced a teammate with missing limbs.
+    /// </summary>
+    private static bool HasBodyVisualRoots(Transform source)
+    {
+        foreach (string rootName in BodyVisualRoots)
+        {
+            if (source.Find(rootName) == null)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Renderers under the body's visual roots (no weapon/clothing noise).</summary>
+    private static int CountBodyRenderers(Transform source)
+    {
+        int total = 0;
+        foreach (string rootName in BodyVisualRoots)
+        {
+            Transform? root = source.Find(rootName);
+            if (root == null)
+            {
+                continue;
+            }
+
+            foreach (Renderer renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer != null)
+                {
+                    total++;
+                }
+            }
+        }
+
+        return total;
     }
 
     /// <summary>Names of the direct children of the local player root.</summary>
@@ -3018,7 +3113,8 @@ internal sealed class RemoteAvatar
         cloned = false;
         source ??= UnityEngine.Object.FindObjectOfType<PlayerMovement>()?.transform;
 
-        if (source != null && !IsMenuScene(source.gameObject.scene.name))
+        if (source != null && !IsMenuScene(source.gameObject.scene.name) &&
+            HasBodyVisualRoots(source))
         {
             try
             {
