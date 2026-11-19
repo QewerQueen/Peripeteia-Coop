@@ -33,6 +33,7 @@ param(
     [switch]$StoryScan,
     [switch]$SaveTest,
     [switch]$DeathTest,
+    [switch]$RollbackTest,
     [switch]$NpcDeathTest,
     [switch]$ContainerScan,
     [switch]$LootTest,
@@ -115,6 +116,9 @@ if ($SaveTest -and -not $NoCoop) {
 if ($DeathTest -and -not $NoCoop) {
     $hostCoop += " -coop-death-test"
     $clientCoop += " -coop-death-test"
+}
+if ($RollbackTest -and -not $NoCoop) {
+    $hostCoop += " -coop-rollback-test"
 }
 if ($KeyTest -and -not $NoCoop) {
     $hostCoop += " -coop-key-test `"$KeyTest`""

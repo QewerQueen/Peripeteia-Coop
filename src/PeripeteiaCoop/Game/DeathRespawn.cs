@@ -73,15 +73,38 @@ internal static class DeathRespawn
     /// world (the player picked a save, or the host asked for one) instead of
     /// the game's own "come back from death" step.
     ///
-    /// Both end up in <c>LoadProcedureFromDeath</c>: the death screen calls
-    /// <c>DEAD.Revive()</c> which calls it, and so does
-    /// <c>SaveHandler.LoadProcedure</c> for every in-level load. Without this
-    /// flag the respawn would swallow deliberate rollbacks too.
+    /// The death screen reaches the actual load through
+    /// <c>LoadProcedureFromDeath</c> (which calls <c>LoadProcedure</c> with
+    /// <c>fromDEAD=true</c>), while a manual rollback calls
+    /// <c>LoadProcedure</c> directly. The mark guards the narrow window where a
+    /// deliberate load might re-enter the death path; it is cleared again by
+    /// <c>SaveLoadSync</c> as soon as that load has finished.
     /// </summary>
     public static void MarkDeliberateLoad()
     {
         _deliberateLoad = true;
         _deliberateLoadTime = Time.unscaledTime;
+    }
+
+    /// <summary>
+    /// Clears the deliberate-load mark once the load that needed it has finished.
+    /// The game reaches a manual rollback through LoadProcedure directly, not
+    /// through LoadProcedureFromDeath, so TryRespawn never sees (and never
+    /// consumes) the mark. Leaving it set would make the next death within the
+    /// timeout look like another rollback and trigger a full scene reload.
+    /// </summary>
+    public static void ClearDeliberateLoad()
+    {
+        if (!_deliberateLoad)
+        {
+            return;
+        }
+
+        _deliberateLoad = false;
+        _deliberateLoadTime = 0.0f;
+        CoopPlugin.LogSource.LogInfo(
+            "[save] Deliberate load finished; a later death will respawn in place again."
+        );
     }
 
     /// <summary>

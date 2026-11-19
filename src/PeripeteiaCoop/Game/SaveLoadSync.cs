@@ -285,4 +285,15 @@ internal static class SaveLoadProcedurePatch
         );
         return false;
     }
+
+    /// <summary>
+    /// The mark is only needed while the deliberate load is running, in case the
+    /// game re-enters its death-load path from inside it. Once the load has
+    /// completed it must go: otherwise the next death inside the timeout would
+    /// be mistaken for another rollback and reload the whole level.
+    /// </summary>
+    private static void Postfix()
+    {
+        DeathRespawn.ClearDeliberateLoad();
+    }
 }

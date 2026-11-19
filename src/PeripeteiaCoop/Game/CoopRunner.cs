@@ -26,6 +26,8 @@ public sealed class CoopRunner : MonoBehaviour
     private bool _deathTestDone;
     private int _deathTestPhase;
     private float _nextDeathTestTime;
+    private int _rollbackTestPhase;
+    private float _nextRollbackTestTime;
     private float _nextNpcDeathTestTime;
     private int _npcDeathsForced;
     private int _containerScanCount;
@@ -61,6 +63,7 @@ public sealed class CoopRunner : MonoBehaviour
         TryKeyTest();
         TrySaveTest();
         TryDeathTest();
+        TryRollbackTest();
         TryNpcDeathTest();
         TryLootTest();
         TryContainerScan();
@@ -349,6 +352,84 @@ public sealed class CoopRunner : MonoBehaviour
             }
 
             return;
+        }
+    }
+
+    /// <summary>
+    /// Debug-only (-coop-rollback-test): force one real mid-level load, then ask
+    /// for the death revive once the new scene has settled. A deliberate load
+    /// must roll the shared world back (and tell the client), while the death
+    /// that follows must stay local. This catches the case where the load's
+    /// "this is a rollback" mark outlived the load and swallowed a later revive.
+    /// </summary>
+    private void TryRollbackTest()
+    {
+        if (!CoopPlugin.Settings.RollbackTest)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < _nextRollbackTestTime)
+        {
+            return;
+        }
+
+        SaveHandler? handler = UnityEngine.Object.FindObjectOfType<SaveHandler>();
+        if (handler == null || handler.onMainMenuScene)
+        {
+            return;
+        }
+
+        string saveName = SaveVersionController.currentSaveName ?? string.Empty;
+        if (string.IsNullOrEmpty(saveName))
+        {
+            return;
+        }
+
+        if (_rollbackTestPhase == 0)
+        {
+            if (_localPlayer == null || !_localPlayer.isActiveAndEnabled)
+            {
+                return;
+            }
+
+            _rollbackTestPhase = 1;
+            _nextRollbackTestTime = Time.unscaledTime + 3.0f;
+            CoopPlugin.LogSource.LogInfo(
+                $"[test] rollback test: forcing a deliberate load of '{saveName}'."
+            );
+
+            try
+            {
+                handler.LoadProcedure(false, saveName, false);
+            }
+            catch (Exception exception)
+            {
+                CoopPlugin.LogSource.LogWarning(
+                    $"[test] rollback test load failed: {exception.GetType().Name}: {exception.Message}"
+                );
+                _rollbackTestPhase = 2;
+            }
+            return;
+        }
+
+        if (_rollbackTestPhase == 1)
+        {
+            _rollbackTestPhase = 2;
+            CoopPlugin.LogSource.LogInfo(
+                "[test] rollback test: calling the death revive right after the load."
+            );
+
+            try
+            {
+                handler.LoadProcedureFromDeath();
+            }
+            catch (Exception exception)
+            {
+                CoopPlugin.LogSource.LogWarning(
+                    $"[test] rollback test death failed: {exception.GetType().Name}: {exception.Message}"
+                );
+            }
         }
     }
 

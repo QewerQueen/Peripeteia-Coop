@@ -96,6 +96,14 @@ internal sealed class CoopSettings
     public bool DeathTest { get; private set; }
 
     /// <summary>
+    /// Debug-only solo test mode: force one deliberate mid-level load and then a
+    /// death right after it, so a retest can prove that the load still rolls the
+    /// world back but the following death respawns in place instead of triggering
+    /// a second rollback. Never enabled unless -coop-rollback-test is passed.
+    /// </summary>
+    public bool RollbackTest { get; private set; }
+
+    /// <summary>
     /// Debug-only solo test mode: the name of a key/quest item to pick up once in
     /// a level, so a retest can prove that a key picked up by one player stays in
     /// the other player's world instead of vanishing. Never set unless
@@ -273,6 +281,11 @@ internal sealed class CoopSettings
                 case "-coop-death-test":
                 case "--coop-death-test":
                     settings.DeathTest = true;
+                    break;
+
+                case "-coop-rollback-test":
+                case "--coop-rollback-test":
+                    settings.RollbackTest = true;
                     break;
 
                 case "-coop-key-test":
