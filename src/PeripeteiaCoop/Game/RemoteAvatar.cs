@@ -153,6 +153,18 @@ internal sealed class RemoteAvatar
     private const float DragStiffness = 10.0f;
     private const float DragMaxSpeed = 7.0f;
 
+    // --- Following the sender's body ----------------------------------------
+    //
+    // The puppet tracks the sender's reported transform with a short time
+    // constant, which is smooth on flat ground but leaves the body trailing
+    // behind during a fast vertical move (riding an elevator, a long fall).
+    // The catch-up rate scales with the distance and the body snaps once the
+    // gap is large, so it stays with the sender instead of "flying after".
+    private const float FollowBaseRate = 12.0f;
+    private const float FollowMaxRate = 40.0f;
+    private const float FollowRateDistance = 2.0f;
+    private const float FollowSnapDistance = 6.0f;
+
     private bool _corpseDragging;
     private float _nextCorpsePoseTime;
     private Vector3 _dragHoldStart;
@@ -2942,9 +2954,26 @@ internal sealed class RemoteAvatar
             return;
         }
 
-        float t = 1.0f - Mathf.Exp(-12.0f * deltaTime);
-        _position = Vector3.Lerp(_position, TargetPosition, t);
-        _yaw = Mathf.LerpAngle(_yaw, TargetYaw, t);
+        float distance = Vector3.Distance(_position, TargetPosition);
+        if (distance >= FollowSnapDistance)
+        {
+            // A large gap (a scripted teleport, a missed frame burst, or the
+            // sender riding a fast lift) is snapped instead of smoothed: the
+            // slow chase is what made the body look like it flew away.
+            _position = TargetPosition;
+            _yaw = TargetYaw;
+        }
+        else
+        {
+            float rate = Mathf.Lerp(
+                FollowBaseRate,
+                FollowMaxRate,
+                Mathf.Clamp01(distance / FollowRateDistance)
+            );
+            float t = 1.0f - Mathf.Exp(-rate * deltaTime);
+            _position = Vector3.Lerp(_position, TargetPosition, t);
+            _yaw = Mathf.LerpAngle(_yaw, TargetYaw, t);
+        }
 
         Root.transform.position = _position;
         Root.transform.rotation = Quaternion.Euler(0.0f, _yaw, 0.0f);

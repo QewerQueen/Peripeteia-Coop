@@ -182,6 +182,11 @@
 Другие параметры запуска:
 
 - `-DoorTest` — тестовое открытие/закрытие двери на хосте;
+- `-ElevatorTest` — клиент каждые 8 с вызывает первый многоэтажный лифт
+  (`elevator.selectFloor`), а также раз в секунду печатает `[elev] diag ...`
+  (позиция кабины клиента и хоста, дистанция, этажи). Так проверяется синк
+  лифтов на одной машине: у хоста появляется `[elev] applied remote call ...`,
+  у клиента кабина едет следом за хостовой (дистанция доли метра);
 - `-AutoPilotHunt` — хост идёт к ближайшему враждебному NPC, клиент следует за
   хостом и периодически стреляет по NPC; так проверяется, что враг замечает и
   атакует клиента, а урон клиента по NPC доходит до хоста;
@@ -231,9 +236,12 @@ BepInEx/LogOutput.1.log
 [avatar] full animation Animator enabled on 'UpperMesh'.
 [avatar] id=1 dragging=on
 [doors] registered=18 scene='tutorial'.
+[elev] registered=10 scene='tutorial'.
+[elev] selectFloor(1) on 'tutorial|/skyliftcryo[0]' (sharing).
+[elev] applied remote call floor=1 on 'tutorial|/skyliftcryo[0]'.
 [items] known=... groups=... scene='...'
 [weapon] local item='...' template='...' hash=...
-[sync] enemies mirrored=... deaths=.../... story=.../... storyEffects=... playerDeaths=.../... saveLoads=.../... scenes=.../...
+[sync] enemies mirrored=... deaths=.../... story=.../... storyEffects=... playerDeaths=.../... saveLoads=.../... scenes=.../... elevators=.../... tracers=.../... corpses=...
 [ai] remote player 1 registered as a target on '...'
 [story] dialogue consumed: '...'
 [story] dialogue '...' started away from the local player; ignoring.

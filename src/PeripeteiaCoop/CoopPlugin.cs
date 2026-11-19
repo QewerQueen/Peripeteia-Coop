@@ -102,6 +102,8 @@ public sealed class CoopPlugin : BasePlugin
 
     internal static bool SyncSceneTransitions { get; private set; } = true;
 
+    internal static bool WorldSyncElevators { get; private set; } = true;
+
     internal static bool PlayerSyncDeath { get; private set; } = true;
 
     internal static bool PlayerDeathRagdoll { get; private set; } = true;
@@ -480,6 +482,13 @@ public sealed class CoopPlugin : BasePlugin
             "Keep level transitions in step: when one player walks into a level exit, the other machine plays the same transition and follows them into the new level. Turn off to move between levels independently."
         ).Value;
 
+        WorldSyncElevators = Config.Bind(
+            "World",
+            "SyncElevators",
+            true,
+            "Share the world elevators (and the trains/conveyors that use the same component): whoever presses the call button, both players ride the same cabin, and the host's floor keeps a late joiner in step. Turn off to let each player move the lifts independently."
+        ).Value;
+
         BlockClientRollback = Config.Bind(
             "Client",
             "BlockRollback",
@@ -659,6 +668,9 @@ public sealed class CoopPlugin : BasePlugin
 
         TryPatch(typeof(DoorRegisterStartPatch));
         TryPatch(typeof(DoorRegisterOnStartPatch));
+        TryPatch(typeof(ElevatorSelectFloorPatch));
+        TryPatch(typeof(ElevatorRegisterStartPatch));
+        TryPatch(typeof(ElevatorRegisterOnStartPatch));
         TryPatch(typeof(ItemRegisterStartPatch));
         TryPatch(typeof(ItemRegisterOnStartPatch));
         TryPatch(typeof(ItemRegisterOnLoadPatch));

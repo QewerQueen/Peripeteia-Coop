@@ -27,6 +27,7 @@ param(
     [switch]$AutoPilotHunt,
     [string]$SceneTest = "",
     [switch]$DoorTest,
+    [switch]$ElevatorTest,
     [switch]$CorpseTest,
     [string]$KeyTest = "",
     [switch]$StoryScan,
@@ -91,6 +92,9 @@ if ($LoadSave -and -not $NoCoop) {
 }
 if ($DoorTest -and -not $NoCoop) {
     $hostCoop += " -coop-door-test"
+}
+if ($ElevatorTest -and -not $NoCoop) {
+    $clientCoop += " -coop-elevator-test"
 }
 if ($CorpseTest -and -not $NoCoop) {
     $hostCoop += " -coop-corpse-test"

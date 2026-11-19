@@ -45,6 +45,8 @@ internal sealed class CoopNetwork : IDisposable
         SaveChunk = 21,
         SaveDone = 22,
         PlayerState = 23,
+        ElevatorCall = 24,
+        ElevatorState = 25,
     }
 
     [Flags]
@@ -60,7 +62,7 @@ internal sealed class CoopNetwork : IDisposable
     }
 
     private const string ConnectionKey = "peripeteia-coop";
-    private const int ProtocolVersion = 21;
+    private const int ProtocolVersion = 22;
     private const float PoseInterval = 1.0f / 30.0f;
     private const float StatsInterval = 5.0f;
 
@@ -279,6 +281,7 @@ internal sealed class CoopNetwork : IDisposable
         _localPlayer = localPlayer;
         _net.PollEvents();
         DoorSync.Tick();
+        ElevatorSync.Tick();
         ItemSync.Tick(localPlayer != null ? localPlayer.transform : null);
         WeaponSync.Tick(localPlayer);
         CombatSync.Tick(localPlayer);
@@ -396,6 +399,7 @@ internal sealed class CoopNetwork : IDisposable
                     $"playerDeaths={PlayerStateSync.DeathsSent}/{PlayerStateSync.DeathsApplied} " +
                     $"saveLoads={SaveLoadSync.LoadsRequested}/{SaveLoadSync.LoadsApplied} " +
                     $"scenes={SceneSync.ChangesSent}/{SceneSync.ChangesApplied} " +
+                    $"elevators={ElevatorSync.CallsSent}/{ElevatorSync.CallsApplied} " +
                     $"tracers={NpcShotSync.Sent}/{NpcShotSync.Received} corpses={LocalCorpse.Applied}"
                 );
             }
@@ -572,6 +576,88 @@ internal sealed class CoopNetwork : IDisposable
         writer.Put(key);
         writer.Put(open);
         writer.Put(locked);
+    }
+
+    /// <summary>
+    /// A local elevator call. Sent by whichever player pressed the button; the
+    /// host relays it to the other clients.
+    /// </summary>
+    public void SendElevatorCall(string key, int floorNo)
+    {
+        if (_settings.Role == CoopRole.Offline || _net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        WriteElevatorCall(writer, key, floorNo);
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            _net.SendToAll(writer, DeliveryMethod.ReliableOrdered);
+            return;
+        }
+
+        NetPeer? host = _net.FirstPeer;
+        host?.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    private static void WriteElevatorCall(NetDataWriter writer, string key, int floorNo)
+    {
+        writer.Put((byte)PacketType.ElevatorCall);
+        writer.Put(key);
+        writer.Put(floorNo);
+    }
+
+    /// <summary>Host only: the authoritative elevator floor and cabin transform.</summary>
+    public void SendElevatorState(string key, int floorNo, Vector3 position, Quaternion rotation)
+    {
+        if (_settings.Role != CoopRole.Host || _net.ConnectedPeersCount == 0)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        WriteElevatorState(writer, key, floorNo, position, rotation);
+        _net.SendToAll(writer, DeliveryMethod.Sequenced);
+    }
+
+    public void SendElevatorStateTo(
+        NetPeer peer,
+        string key,
+        int floorNo,
+        Vector3 position,
+        Quaternion rotation
+    )
+    {
+        if (_settings.Role != CoopRole.Host)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        WriteElevatorState(writer, key, floorNo, position, rotation);
+        peer.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
+    private static void WriteElevatorState(
+        NetDataWriter writer,
+        string key,
+        int floorNo,
+        Vector3 position,
+        Quaternion rotation
+    )
+    {
+        writer.Put((byte)PacketType.ElevatorState);
+        writer.Put(key);
+        writer.Put(floorNo);
+        writer.Put(position.x);
+        writer.Put(position.y);
+        writer.Put(position.z);
+        writer.Put(rotation.x);
+        writer.Put(rotation.y);
+        writer.Put(rotation.z);
+        writer.Put(rotation.w);
     }
 
     public void SendItemState(
@@ -2112,6 +2198,7 @@ internal sealed class CoopNetwork : IDisposable
             type != PacketType.NpcShot &&
             type != PacketType.CorpsePose &&
             type != PacketType.PlayerState &&
+            type != PacketType.ElevatorState &&
             type != PacketType.SaveChunk)
         {
             CoopPlugin.LogSource.LogInfo($"[net] Received {type} from {peer.Address}:{peer.Port}.");
@@ -2209,6 +2296,14 @@ internal sealed class CoopNetwork : IDisposable
 
             case PacketType.SaveDone:
                 ReceiveSaveDone();
+                break;
+
+            case PacketType.ElevatorCall:
+                ReceiveElevatorCall(peer, reader);
+                break;
+
+            case PacketType.ElevatorState:
+                ReceiveElevatorState(reader);
                 break;
         }
     }
@@ -2590,6 +2685,7 @@ internal sealed class CoopNetwork : IDisposable
         avatar.Name = name;
 
         DoorSync.SendSnapshot(peer);
+        ElevatorSync.SendSnapshot(peer);
 
         CoopPlugin.LogSource.LogInfo($"[net] Player {id} is '{name}'.");
     }
@@ -2770,6 +2866,53 @@ internal sealed class CoopNetwork : IDisposable
         }
 
         DoorSync.Apply(key, open, locked);
+    }
+
+    private void ReceiveElevatorCall(NetPeer peer, NetDataReader reader)
+    {
+        if (_settings.Role == CoopRole.Offline)
+        {
+            return;
+        }
+
+        string key = reader.GetString();
+        int floorNo = reader.GetInt();
+
+        if (_settings.Role == CoopRole.Host)
+        {
+            // Relay a client's call to the other clients (3+ player sessions).
+            var relay = new NetDataWriter();
+            WriteElevatorCall(relay, key, floorNo);
+            foreach (NetPeer other in _net.ConnectedPeerList)
+            {
+                if (other != peer)
+                {
+                    other.Send(relay, DeliveryMethod.ReliableOrdered);
+                }
+            }
+        }
+
+        ElevatorSync.ApplyCall(key, floorNo);
+    }
+
+    private void ReceiveElevatorState(NetDataReader reader)
+    {
+        if (_settings.Role != CoopRole.Client)
+        {
+            return;
+        }
+
+        string key = reader.GetString();
+        int floorNo = reader.GetInt();
+        var position = new Vector3(reader.GetFloat(), reader.GetFloat(), reader.GetFloat());
+        var rotation = new Quaternion(
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat(),
+            reader.GetFloat()
+        );
+
+        ElevatorSync.ApplyState(key, floorNo, position, rotation);
     }
 
     private void ReceiveItemState(NetPeer peer, NetDataReader reader)

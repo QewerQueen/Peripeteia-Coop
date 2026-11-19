@@ -69,6 +69,13 @@ internal static class StorySync
 
     public static bool Enabled => CoopPlugin.Settings.Role != CoopRole.Offline && CoopPlugin.StoryEnabled;
 
+    /// <summary>
+    /// True while this machine is replaying a story effect it received from the
+    /// other player. Side-effect patches (an elevator call, a flag set) use this
+    /// to avoid echoing the change straight back.
+    /// </summary>
+    public static bool IsApplyingRemote => _applyingRemote || _suppressBroadcast;
+
     public static int EventsSent => _eventsSent;
 
     public static int EventsApplied => _eventsApplied;
@@ -1139,7 +1146,20 @@ internal static class StorySync
 
         if (kind == (byte)StoryKind.QuestAction)
         {
-            ReplayQuestEffects(key);
+            // The replay can drive an elevator, a door or a flag through the
+            // game's own listeners. Suppress the side-effect broadcasts while it
+            // runs so a replayed elevator call is not sent back to the sender.
+            _suppressBroadcast = true;
+            ElevatorSync.BeginRemoteApply();
+            try
+            {
+                ReplayQuestEffects(key);
+            }
+            finally
+            {
+                ElevatorSync.EndRemoteApply();
+                _suppressBroadcast = false;
+            }
         }
 
         if (kind == (byte)StoryKind.Teleport)

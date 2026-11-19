@@ -44,6 +44,14 @@ internal sealed class CoopSettings
     public bool DoorTest { get; private set; }
 
     /// <summary>
+    /// Debug-only solo test mode: the host automatically calls the first
+    /// multi-floor elevator every few seconds, so the elevator sync (a client
+    /// call reaches the host, and the host's floor reaches the client) can be
+    /// retested on one machine. Never set unless -coop-elevator-test is passed.
+    /// </summary>
+    public bool ElevatorTest { get; private set; }
+
+    /// <summary>
     /// Debug-only solo test mode: the host automatically grabs a dead teammate's
     /// body and carries it around, so a retest can prove that a corpse drag is
     /// shared with the body's owner without having to die and hold a key on two
@@ -188,6 +196,11 @@ internal sealed class CoopSettings
                 case "-coop-door-test":
                 case "--coop-door-test":
                     settings.DoorTest = true;
+                    break;
+
+                case "-coop-elevator-test":
+                case "--coop-elevator-test":
+                    settings.ElevatorTest = true;
                     break;
 
                 case "-coop-corpse-test":
