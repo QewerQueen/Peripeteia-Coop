@@ -66,6 +66,11 @@ The current prototype was tested against **Peripeteia: Metanoia**, build
 `6.0.0-be.793+dbc82f0`. Game updates can invalidate the generated interop
 assemblies and break the mod; pin the game version when testing or publishing.
 
+The **demo** build (`Peripeteia Demo`) is supported by the same mod build. Its
+game version string differs from the full game (`Demo` vs `Metanoia`), so the
+handshake pairs demo players only with other demo players, and full-game players
+only with other full-game players.
+
 ## Build from source (developers)
 
 1. Install BepInEx 6 into the game folder.
@@ -163,6 +168,10 @@ step-by-step guide below.
 Интернет нужен один раз — чтобы скачать BepInEx (~33 МБ). Для установки офлайн
 положи рядом с `Install.bat` файл `BepInEx-Unity.IL2CPP-win-x64-*.zip`, и он
 будет использован вместо скачивания.
+
+Демо-версия (`Peripeteia Demo`) тоже поддерживается — установщик находит её сам,
+и мод тот же. Но строка версии игры у демо другая (`Demo` против `Metanoia`),
+поэтому демо соединяется только с демо, а полная версия — только с полной.
 
 ## Пошаговый гайд: проверить кооп в игре
 

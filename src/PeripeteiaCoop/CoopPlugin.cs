@@ -540,12 +540,15 @@ public sealed class CoopPlugin : BasePlugin
 
         _harmony = new Harmony(PluginInfo.Guid);
 
-        // Always-on patches: probes and client save protection.
+        // Always-on patches: probes and client save protection. Each is applied
+        // through TryPatch so a single missing game method (for example in the
+        // demo build, which lacks SaveHandler.AutosaveOnLevelStart) only skips
+        // that one patch instead of aborting the whole plugin.
         TryPatch(typeof(PlayerProbePatch));
-        _harmony.PatchAll(typeof(PlayerHierarchyProbe));
-        _harmony.PatchAll(typeof(ClientBlockSaveRequestPatch));
-        _harmony.PatchAll(typeof(ClientBlockQueuedSavePatch));
-        _harmony.PatchAll(typeof(ClientBlockAutosavePatch));
+        TryPatch(typeof(PlayerHierarchyProbe));
+        TryPatch(typeof(ClientBlockSaveRequestPatch));
+        TryPatch(typeof(ClientBlockQueuedSavePatch));
+        TryPatch(typeof(ClientBlockAutosavePatch));
 
         // The "Peripeteia Coop" menu button and LAN discovery exist even in a
         // plain single-player launch, so a player can host or join without any

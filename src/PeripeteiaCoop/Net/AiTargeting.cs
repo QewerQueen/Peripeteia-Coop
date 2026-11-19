@@ -484,11 +484,14 @@ internal static class AiTargeting
                     string name = member.trans != null
                         ? member.trans.name
                         : (member.GO != null ? member.GO.name : "<none>");
+                    // factionMemberData.head does not exist in the demo build, and
+                    // a direct reference makes the whole method fail to JIT there,
+                    // so this diagnostic omits it.
                     CoopPlugin.LogSource.LogInfo(
                         $"[ai]   faction[{faction}][{i}] '{name}' alive={member.alive} " +
                         $"goodToGo={member.goodToGo} con={member.con != null} senses={member.senses != null} " +
                         $"AITar={member.AITar != null} HP={member.HP != null} DMG={member.DMG != null} " +
-                        $"hboxes={member.hboxes != null} head={member.head != null} " +
+                        $"hboxes={member.hboxes != null} " +
                         $"sight={member.sight:F1} snipper={member.snipper:F1} pos={member.pos}."
                     );
                 }

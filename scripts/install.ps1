@@ -209,6 +209,9 @@ function Get-SteamLibraries {
 
 function Find-GameDir {
     $candidates = New-Object System.Collections.Generic.List[string]
+    # Demo installs are searched too, but only after every full-game location, so
+    # a machine that has both keeps modding the full game by default.
+    $demoCandidates = New-Object System.Collections.Generic.List[string]
 
     # 1. Explicit parameter.
     if ($GameDir) { [void]$candidates.Add($GameDir) }
@@ -230,6 +233,7 @@ function Find-GameDir {
     foreach ($lib in Get-SteamLibraries) {
         if (Test-Path -LiteralPath $lib) {
             [void]$candidates.Add((Join-Path $lib "steamapps\common\Peripeteia"))
+            [void]$demoCandidates.Add((Join-Path $lib "steamapps\common\Peripeteia Demo"))
         }
     }
 
@@ -240,9 +244,13 @@ function Find-GameDir {
         [void]$candidates.Add((Join-Path $drive "Steam\steamapps\common\Peripeteia"))
         [void]$candidates.Add((Join-Path $drive "Games\Peripeteia"))
         [void]$candidates.Add((Join-Path $drive "Peripeteia"))
+        [void]$demoCandidates.Add((Join-Path $drive "SteamLibrary\steamapps\common\Peripeteia Demo"))
+        [void]$demoCandidates.Add((Join-Path $drive "Steam\steamapps\common\Peripeteia Demo"))
+        [void]$demoCandidates.Add((Join-Path $drive "Games\Peripeteia Demo"))
+        [void]$demoCandidates.Add((Join-Path $drive "Peripeteia Demo"))
     }
 
-    foreach ($candidate in $candidates) {
+    foreach ($candidate in ($candidates + $demoCandidates)) {
         if (Test-GameDir $candidate) {
             return (Resolve-Path -LiteralPath $candidate).Path
         }
