@@ -507,14 +507,14 @@ public sealed class CoopPlugin : BasePlugin
             "Net",
             "AutoDownloadSave",
             true,
-            "Client only: on connect, automatically download the host's newest save so both machines start from the same file. Turn off to only download it from the menu button."
+            "Client only: on the first successful connect, automatically download the host's newest save so both machines start from the same file. Reconnects keep the current run and resync state over the network instead of reloading; turn this off to only download from the menu button."
         ).Value;
 
         AutoStartDownloadedSave = Config.Bind(
             "Net",
             "AutoStartDownloadedSave",
             true,
-            "Client only: after the host's save has been downloaded, start the run from it automatically instead of waiting for the player to open the game's load menu. Only happens while the client is still on the main menu."
+            "Client only: after the host's save has been downloaded on the first join, start the run from it automatically instead of waiting for the player to open the game's load menu. Reconnects do not download a save, so they never restart the level."
         ).Value;
 
         SpawnNearHost = Config.Bind(

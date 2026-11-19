@@ -224,6 +224,7 @@ internal static class SaveLoadProcedurePatch
         ContainerSync.ResetForLoad();
         WeaponSync.ResetForLoad();
         NpcShotSync.ResetForLoad();
+        PlayerStateSync.ResetForLoad();
     }
 
     private static bool Prefix(

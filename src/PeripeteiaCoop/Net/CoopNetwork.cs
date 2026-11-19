@@ -970,6 +970,32 @@ internal sealed class CoopNetwork : IDisposable
         host?.Send(writer, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>
+    /// Host only: send the one-shot story locks to a single (re)joining client.
+    /// The list travels in the text field of a normal StoryEvent so older builds
+    /// simply ignore the unknown kind and keep protocol compatibility.
+    /// </summary>
+    public void SendStorySnapshot(NetPeer peer, string consumedKeys)
+    {
+        if (_settings.Role != CoopRole.Host || peer.ConnectionState != ConnectionState.Connected)
+        {
+            return;
+        }
+
+        var writer = new NetDataWriter();
+        WriteStoryEvent(
+            writer,
+            string.Empty,
+            (byte)StoryKind.Snapshot,
+            Vector3.zero,
+            consumedKeys ?? string.Empty,
+            0,
+            Array.Empty<string>(),
+            Array.Empty<bool>()
+        );
+        peer.Send(writer, DeliveryMethod.ReliableOrdered);
+    }
+
     private static void WriteStoryEvent(
         NetDataWriter writer,
         string key,
@@ -2131,6 +2157,11 @@ internal sealed class CoopNetwork : IDisposable
 
     private void OnPeerConnected(NetPeer peer)
     {
+        // A fresh peer may bring a fresh local player (after a level reload or a
+        // reconnect). Re-baseline the death watcher so the first dead -> alive
+        // transition after the handshake is not swallowed.
+        PlayerStateSync.ResetForLoad();
+
         if (_settings.Role == CoopRole.Host)
         {
             int id = _nextPeerId++;
@@ -2173,9 +2204,20 @@ internal sealed class CoopNetwork : IDisposable
 
             CoopPlugin.LogSource.LogInfo($"[net] Connected to host {peer.Address}:{peer.Port}.");
 
-            if (CoopPlugin.AutoDownloadSave)
+            // Only the first join needs the host's save. Re-downloading and
+            // auto-starting it on every reconnect would tear down the level the
+            // client is already playing (and reset aug bindings / personal state
+            // that are not stored in the save). A failed first transfer leaves
+            // ReceivedCount at zero, so a later reconnect still retries.
+            if (CoopPlugin.AutoDownloadSave && SaveTransfer.ReceivedCount == 0)
             {
                 SendSaveRequest();
+            }
+            else if (CoopPlugin.AutoDownloadSave)
+            {
+                CoopPlugin.LogSource.LogInfo(
+                    "[save] Reconnected with a save already on disk; keeping the current run instead of re-downloading."
+                );
             }
         }
     }
@@ -2431,8 +2473,9 @@ internal sealed class CoopNetwork : IDisposable
 
             // The join snapshot was sent while the peer was still in the menu,
             // where item packets are rejected. Now that it is in the level,
-            // repeat the authoritative item state.
+            // repeat the authoritative item state and the one-shot story locks.
             ItemSync.SendSnapshot();
+            StorySync.SendSnapshot(peer);
         }
 
         SceneSync.ApplyRemoteTransition(levelName);
@@ -2740,6 +2783,7 @@ internal sealed class CoopNetwork : IDisposable
 
         DoorSync.SendSnapshot(peer);
         ElevatorSync.SendSnapshot(peer);
+        StorySync.SendSnapshot(peer);
 
         CoopPlugin.LogSource.LogInfo($"[net] Player {id} is '{name}'.");
     }

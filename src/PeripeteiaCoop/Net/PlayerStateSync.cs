@@ -52,6 +52,20 @@ internal static class PlayerStateSync
 
     public static int DeathsApplied => _deathsApplied;
 
+    /// <summary>
+    /// Forget the sampled death state. A save load (or a reconnect that rebuilds
+    /// the local player) creates a fresh body; without this the old baseline can
+    /// swallow the first dead -&gt; alive transition and leave a stale corpse on
+    /// the teammate's screen.
+    /// </summary>
+    public static void ResetForLoad()
+    {
+        _initialized = false;
+        _lastDead = false;
+        _nextResendTime = 0.0f;
+        Pending.Clear();
+    }
+
     public static void Tick(PlayerMovement? localPlayer)
     {
         if (!Enabled)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using LiteNetLib;
 using HarmonyLib;
 using Il2CppInterop.Runtime;
 using UnityEngine;
@@ -99,6 +100,23 @@ internal static class StorySync
 
         _localPlayer = localPlayer;
         EnsureScene();
+    }
+
+    /// <summary>
+    /// Sent by the host when a player (re)joins. Story events are one-shot, so a
+    /// reconnecting client cannot rebuild the consumed branch from periodic
+    /// traffic; without this it would be allowed to replay dialogues or quest
+    /// objects that were already used while it was away.
+    /// </summary>
+    public static void SendSnapshot(NetPeer peer)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        EnsureScene();
+        CoopPlugin.Network?.SendStorySnapshot(peer, string.Join("\n", Consumed));
     }
 
     // ------------------------------------------------------------------
@@ -1151,6 +1169,30 @@ internal static class StorySync
 
         EnsureScene();
 
+        if (kind == (byte)StoryKind.Snapshot)
+        {
+            int added = 0;
+            string prefix = _scene + "|";
+            string[] keys = (text ?? string.Empty).Split('\n');
+            foreach (string snapshotKey in keys)
+            {
+                if (string.IsNullOrEmpty(snapshotKey) ||
+                    !snapshotKey.StartsWith(prefix, StringComparison.Ordinal) ||
+                    Consumed.Contains(snapshotKey))
+                {
+                    continue;
+                }
+
+                Consumed.Add(snapshotKey);
+                added++;
+            }
+
+            CoopPlugin.LogSource.LogInfo(
+                $"[story] rejoin snapshot restored {added} consumed event(s) in '{_scene}'."
+            );
+            return;
+        }
+
         if (kind == (byte)StoryKind.DialogueAction)
         {
             ApplyDialogueAction(key, text, number);
@@ -1917,6 +1959,7 @@ internal enum StoryKind : byte
     Flag = 5,
     QuestEvent = 6,
     DialogueRelease = 7,
+    Snapshot = 8,
 }
 
 [HarmonyPatch(typeof(NPCConversation), "StartConversation")]

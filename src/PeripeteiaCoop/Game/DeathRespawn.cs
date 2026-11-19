@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -449,6 +450,33 @@ internal static class DeathRespawn
         {
             AugSelect? augs = FindAugSelect(localPlayer);
             _savedAugs = augs?.serializeAugs();
+            if (_savedAugs == null)
+            {
+                CoopPlugin.LogSource.LogWarning(
+                    "[death] no ability state found before death; the respawn will keep its own."
+                );
+                return;
+            }
+
+            var active = new StringBuilder();
+            for (int i = 0; i < _savedAugs!.Length; i++)
+            {
+                if (!_savedAugs![i])
+                {
+                    continue;
+                }
+
+                if (active.Length > 0)
+                {
+                    active.Append(',');
+                }
+                active.Append(i);
+            }
+
+            CoopPlugin.LogSource.LogInfo(
+                $"[death] captured {_savedAugs!.Length} ability slot(s) before death " +
+                $"(active=[{active}])."
+            );
         }
         catch (Exception exception)
         {
@@ -469,28 +497,37 @@ internal static class DeathRespawn
                 return;
             }
 
+            bool[]? saved = _savedAugs;
+            if (saved == null)
+            {
+                // Nothing was captured; forcing everything off would wipe the
+                // player's augs over a probing failure. Leave the fresh body's
+                // own state alone and only refresh the UI.
+                augs.forceUIUpdate();
+                CoopPlugin.LogSource.LogWarning(
+                    "[death] ability state was not captured; keeping the respawn's own state."
+                );
+                return;
+            }
+
             // Start from a consistent state (icon and effect both off), then
             // switch back on what the player had before dying.
             augs.ForceAllAugsOff();
 
             int restored = 0;
-            bool[]? saved = _savedAugs;
-            if (saved != null)
+            for (int i = 0; i < saved.Length; i++)
             {
-                for (int i = 0; i < saved.Length; i++)
+                if (saved[i])
                 {
-                    if (saved[i])
-                    {
-                        augs.deserializeAug(i, true);
-                        restored++;
-                    }
+                    augs.deserializeAug(i, true);
+                    restored++;
                 }
             }
 
             augs.forceUIUpdate();
 
             CoopPlugin.LogSource.LogInfo(
-                $"[death] ability state reset after respawn ({restored} restored)."
+                $"[death] ability state reset after respawn ({restored} restored of {saved.Length} slot(s))."
             );
         }
         catch (Exception exception)
