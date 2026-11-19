@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.Events;
 using UnityEngine.UI;
 
@@ -37,8 +38,16 @@ public sealed class CoopMenu : MonoBehaviour
 
     // Manual "connect by IP" entry, for networks where the LAN beacon does not
     // get through (RadminVPN, Hamachi, plain internet with a forwarded port).
+    // GUI.TextField is stripped from this IL2CPP build ("NotSupportedException"),
+    // so the field is drawn by hand and keys are read from Event.current instead.
     private string _manualAddress = string.Empty;
-    private bool _ipFieldBroken;
+    private bool _ipFocused;
+
+    // While the panel is open the game's own uGUI input is muted, so a click on
+    // the panel cannot fall through to a menu button behind it (for example the
+    // "COOP" button, which would otherwise re-open the panel right after Close).
+    private BaseInputModule? _blockedModule;
+    private bool _blockedNavigation;
 
     /// <summary>Open/close the panel from the menu button or a hotkey.</summary>
     public static void Toggle()
@@ -88,6 +97,7 @@ public sealed class CoopMenu : MonoBehaviour
     private void Update()
     {
         LanDiscovery.Tick();
+        SyncGameInput();
 
         if (CoopPlugin.IsCoopActive && CoopPlugin.Network != null)
         {
@@ -105,6 +115,52 @@ public sealed class CoopMenu : MonoBehaviour
         if (_menuPresent && !_buttonBuilt)
         {
             TryBuildButton();
+        }
+    }
+
+    /// <summary>
+    /// Mutes the game's uGUI input while the panel is open and restores it when
+    /// the panel closes. Without this a click on the IMGUI panel also reaches the
+    /// menu button drawn underneath it (uGUI and IMGUI both see the mouse), which
+    /// made "Close" look broken because the button below it re-opened the panel.
+    /// </summary>
+    private void SyncGameInput()
+    {
+        EventSystem? system = EventSystem.current;
+
+        if (_open)
+        {
+            if (system == null || _blockedModule != null)
+            {
+                return;
+            }
+
+            _blockedModule = system.currentInputModule;
+            _blockedNavigation = system.sendNavigationEvents;
+
+            if (_blockedModule != null)
+            {
+                _blockedModule.enabled = false;
+            }
+
+            system.sendNavigationEvents = false;
+            CoopPlugin.LogSource.LogInfo(
+                "[menu] panel open: the game's menu input is muted while the panel is up."
+            );
+        }
+        else if (_blockedModule != null)
+        {
+            _blockedModule.enabled = true;
+
+            if (system != null)
+            {
+                system.sendNavigationEvents = _blockedNavigation;
+            }
+
+            _blockedModule = null;
+            CoopPlugin.LogSource.LogInfo(
+                "[menu] panel closed: the game's menu input is restored."
+            );
         }
     }
 
@@ -310,11 +366,13 @@ public sealed class CoopMenu : MonoBehaviour
     {
         if (!_open)
         {
+            _ipFocused = false;
+
             // Fallback: if the game's menu could not be cloned, still offer a way in.
             if (_menuPresent && !_buttonBuilt)
             {
                 EnsureStyles();
-                if (GUI.Button(new Rect(12.0f, 12.0f, 160.0f, 30.0f), "COOP", _buttonStyle))
+                if (PanelButton(new Rect(12.0f, 12.0f, 160.0f, 30.0f), "COOP"))
                 {
                     _open = true;
                 }
@@ -369,7 +427,7 @@ public sealed class CoopMenu : MonoBehaviour
 
     private void DrawBrowse(float x, float y, float w)
     {
-        if (GUI.Button(new Rect(x, y, w, 36.0f), "Host game", _buttonStyle))
+        if (PanelButton(new Rect(x, y, w, 36.0f), "Host game"))
         {
             CoopPlugin.StartHostSession(CoopPlugin.DefaultPlayerName);
             _status = "Hosting started. Waiting for a second player...";
@@ -398,7 +456,7 @@ public sealed class CoopMenu : MonoBehaviour
                 LanDiscovery.HostEntry host = hosts[i];
                 string label =
                     $"{host.Name}  -  {host.Scene}  -  {host.Address}:{host.Port}  -  saves: {host.SaveCount}";
-                if (GUI.Button(new Rect(x, y, w, 32.0f), label, _hostButtonStyle))
+                if (PanelButton(new Rect(x, y, w, 32.0f), label, _hostButtonStyle))
                 {
                     CoopPlugin.JoinSession(host.Address, host.Port, CoopPlugin.DefaultPlayerName);
                     _status = $"Connecting to '{host.Name}' ({host.Address}:{host.Port})...";
@@ -422,21 +480,29 @@ public sealed class CoopMenu : MonoBehaviour
         y += 24.0f;
         float connectW = 150.0f;
         float fieldW = w - connectW - 10.0f;
-        _manualAddress = DrawAddressField(new Rect(x, y, fieldW, 30.0f));
-        if (GUI.Button(new Rect(x + fieldW + 10.0f, y, connectW, 30.0f), "Connect by IP", _buttonStyle))
+        DrawAddressField(new Rect(x, y, fieldW, 30.0f));
+        if (PanelButton(new Rect(x + fieldW + 10.0f, y, connectW, 30.0f), "Connect by IP"))
         {
             ConnectManual();
         }
 
-        y += 40.0f;
+        y += 34.0f;
+        GUI.Label(
+            new Rect(x, y, w, 22.0f),
+            _ipFocused
+                ? "Type the host address (for example 26.12.34.56:7777), then press Enter."
+                : "Click the box above, type the host address (for example 26.12.34.56:7777), then press Enter.",
+            _labelStyle
+        );
+        y += 30.0f;
 
         float half = (w - 10.0f) / 2.0f;
-        if (GUI.Button(new Rect(x, y, half, 34.0f), "Refresh", _buttonStyle))
+        if (PanelButton(new Rect(x, y, half, 34.0f), "Refresh"))
         {
             _status = $"Hosts found: {LanDiscovery.Hosts.Count}.";
         }
 
-        if (GUI.Button(new Rect(x + half + 10.0f, y, half, 34.0f), "Close", _buttonStyle))
+        if (PanelButton(new Rect(x + half + 10.0f, y, half, 34.0f), "Close"))
         {
             _open = false;
         }
@@ -453,7 +519,7 @@ public sealed class CoopMenu : MonoBehaviour
 
         if (CoopPlugin.Settings.Role == CoopRole.Client)
         {
-            if (GUI.Button(new Rect(x, y, w, 36.0f), "Download and start the host save", _buttonStyle))
+            if (PanelButton(new Rect(x, y, w, 36.0f), "Download and start the host save"))
             {
                 CoopPlugin.Network?.SendSaveRequest();
                 _status = "Downloading the host save; the run will start when it arrives...";
@@ -493,38 +559,141 @@ public sealed class CoopMenu : MonoBehaviour
             y += 50.0f;
         }
 
-        if (GUI.Button(new Rect(x, y, w, 34.0f), "Close", _buttonStyle))
+        if (PanelButton(new Rect(x, y, w, 34.0f), "Close"))
         {
             _open = false;
         }
     }
 
     /// <summary>
-    /// Draws the free-text "connect by IP" field. GUI.TextField is present in the
-    /// game's interop assemblies, but if a future build ever strips it the menu
-    /// must not break, so a failure degrades to a plain label.
+    /// Draws one of the panel's buttons and reports a click.
+    ///
+    /// GUI.Button is deliberately not used here: in this IL2CPP build its
+    /// hot-control bookkeeping is unreliable once other controls have been
+    /// drawn on the panel (clicking the first button, "Host game", worked, but
+    /// clicking "Close" never fired), so the frame is drawn with GUI.Box and the
+    /// click is taken straight from the mouse-up event instead.
     /// </summary>
-    private string DrawAddressField(Rect rect)
+    private bool PanelButton(Rect rect, string text, GUIStyle? style = null)
     {
-        if (_ipFieldBroken)
+        Event current = Event.current;
+        bool hover = rect.Contains(current.mousePosition);
+
+        Color previous = GUI.color;
+        GUI.color = hover ? new Color(0.72f, 0.88f, 1.0f, 1.0f) : Color.white;
+        GUI.Box(rect, text, style ?? _buttonStyle);
+        GUI.color = previous;
+
+        if (current.type == EventType.MouseUp && hover)
         {
-            GUI.Label(rect, _manualAddress, _labelStyle);
-            return _manualAddress;
+            current.Use();
+            return true;
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// Draws the free-text "connect by IP" field by hand. GUI.TextField (and
+    /// GUILayout) is stripped from this IL2CPP build and throws
+    /// NotSupportedException, so the box, the text, the caret and the key
+    /// handling are all done with the IMGUI primitives that are present.
+    /// </summary>
+    private void DrawAddressField(Rect rect)
+    {
+        Event current = Event.current;
+
+        if (current.type == EventType.MouseDown)
+        {
+            if (rect.Contains(current.mousePosition))
+            {
+                _ipFocused = true;
+                current.Use();
+            }
+            else
+            {
+                _ipFocused = false;
+            }
+        }
+
+        // Field frame + the address itself (a blinking caret shows where typing goes).
+        GUI.Box(rect, GUIContent.none, _boxStyle);
+        string shown = _manualAddress;
+        if (_ipFocused && Mathf.FloorToInt(Time.unscaledTime * 2.0f) % 2 == 0)
+        {
+            shown += "|";
+        }
+
+        GUI.Label(
+            new Rect(rect.x + 8.0f, rect.y + 6.0f, rect.width - 16.0f, rect.height - 10.0f),
+            shown,
+            _labelStyle
+        );
+
+        if (!_ipFocused || current.type != EventType.KeyDown)
+        {
+            return;
+        }
+
+        if (current.keyCode == KeyCode.Backspace)
+        {
+            if (_manualAddress.Length > 0)
+            {
+                _manualAddress = _manualAddress.Substring(0, _manualAddress.Length - 1);
+            }
+
+            current.Use();
+        }
+        else if (current.keyCode == KeyCode.Return || current.keyCode == KeyCode.KeypadEnter)
+        {
+            ConnectManual();
+            current.Use();
+        }
+        else if (current.keyCode == KeyCode.Escape)
+        {
+            _ipFocused = false;
+            current.Use();
+        }
+        else if (current.keyCode == KeyCode.V &&
+                 (current.modifiers & EventModifiers.Control) != 0)
+        {
+            TryPaste();
+            current.Use();
+        }
+        else if (current.character != '\0' && !char.IsControl(current.character))
+        {
+            if (_manualAddress.Length < 40)
+            {
+                _manualAddress += current.character;
+            }
+
+            current.Use();
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+V support for the address field. GUIUtility.systemCopyBuffer is a
+    /// plain native call (unlike GUI.TextField), but it is guarded anyway so a
+    /// stripped build cannot break the panel.
+    /// </summary>
+    private void TryPaste()
+    {
         try
         {
-            return GUI.TextField(rect, _manualAddress, 32);
+            string text = GUIUtility.systemCopyBuffer;
+            if (string.IsNullOrEmpty(text))
+            {
+                return;
+            }
+
+            text = text.Trim();
+            _manualAddress = text.Length > 40 ? text.Substring(0, 40) : text;
         }
         catch (Exception exception)
         {
-            _ipFieldBroken = true;
             CoopPlugin.LogSource.LogWarning(
-                $"[menu] GUI.TextField unavailable ({exception.GetType().Name}); " +
-                "use -coop-connect <ip> on the command line instead."
+                $"[menu] clipboard unavailable ({exception.GetType().Name}); type the address by hand."
             );
-            GUI.Label(rect, _manualAddress, _labelStyle);
-            return _manualAddress;
         }
     }
 
@@ -560,6 +729,7 @@ public sealed class CoopMenu : MonoBehaviour
 
         CoopPlugin.JoinSession(address, port, CoopPlugin.DefaultPlayerName);
         _status = $"Connecting to {address}:{port}...";
+        _ipFocused = false;
         _open = false;
     }
 
