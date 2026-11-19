@@ -692,6 +692,18 @@ internal static class ItemSync
             return;
         }
 
+        // Key/quest items are shared: each player keeps their own copy so both
+        // can hand in the same bulb/key. A break must stay local too, otherwise
+        // breaking one copy destroys the only copy the teammate can use.
+        if (IsKeyItem(item))
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[items] key item '{item.ItemName}' broke locally; kept local so the " +
+                "teammate's copy is not destroyed."
+            );
+            return;
+        }
+
         string key = GetKey(item);
         if (!key.StartsWith(_scene + "|", StringComparison.Ordinal))
         {

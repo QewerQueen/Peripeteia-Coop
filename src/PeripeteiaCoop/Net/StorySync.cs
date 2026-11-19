@@ -199,6 +199,57 @@ internal static class StorySync
         );
     }
 
+    /// <summary>
+    /// A keycard check is the gate on quest hand-ins such as the projector
+    /// Bulb. If the player who started the conversation lacks the item, the
+    /// branch dies without advancing the story. Unlock the conversation so the
+    /// teammate (who may still be carrying the shared copy) can try it.
+    /// </summary>
+    public static void OnKeyItemCheckFailed(keycard card)
+    {
+        if (!Enabled || _suppressBroadcast || _applyingRemote || card == null)
+        {
+            return;
+        }
+
+        NPCConversation? conversation = null;
+        try
+        {
+            conversation = card.GetComponentInParent<NPCConversation>(true);
+            if (conversation == null)
+            {
+                conversation = card.GetComponentInChildren<NPCConversation>(true);
+            }
+        }
+        catch (Exception)
+        {
+            conversation = null;
+        }
+
+        if (conversation == null)
+        {
+            return;
+        }
+
+        string key = KeyOf(conversation.transform);
+        if (!Consumed.Remove(key))
+        {
+            return;
+        }
+
+        _eventsSent++;
+        CoopPlugin.LogSource.LogInfo(
+            $"[story] dialogue '{key}' released after a failed key item check."
+        );
+        CoopPlugin.Network?.SendStoryEvent(
+            key,
+            (byte)StoryKind.DialogueRelease,
+            Vector3.zero,
+            Array.Empty<string>(),
+            Array.Empty<bool>()
+        );
+    }
+
     // ------------------------------------------------------------------
     // Quest objects
     // ------------------------------------------------------------------
@@ -672,7 +723,6 @@ internal static class StorySync
         return string.Equals(method, "SetQuestLog", StringComparison.Ordinal)
             || string.Equals(method, "RemoveQuestLog", StringComparison.Ordinal)
             || string.Equals(method, "setSituation", StringComparison.Ordinal)
-            || string.Equals(method, "VIDE_Override", StringComparison.Ordinal)
             || IsSharedDialogueGiftMethod(method);
     }
 
@@ -747,9 +797,6 @@ internal static class StorySync
                     break;
                 case "setSituation":
                     conversation.setSituation(number);
-                    break;
-                case "VIDE_Override":
-                    conversation.VIDE_Override(number);
                     break;
             }
 
@@ -1119,6 +1166,18 @@ internal static class StorySync
         if (kind == (byte)StoryKind.QuestEvent)
         {
             ApplyRemoteQuestEvent(text, number);
+            return;
+        }
+
+        if (kind == (byte)StoryKind.DialogueRelease)
+        {
+            if (!string.IsNullOrEmpty(key) &&
+                key.StartsWith(_scene + "|", StringComparison.Ordinal) &&
+                Consumed.Remove(key))
+            {
+                _eventsApplied++;
+                CoopPlugin.LogSource.LogInfo($"[story] dialogue '{key}' released by the other player.");
+            }
             return;
         }
 
@@ -1857,6 +1916,7 @@ internal enum StoryKind : byte
     DialogueAction = 4,
     Flag = 5,
     QuestEvent = 6,
+    DialogueRelease = 7,
 }
 
 [HarmonyPatch(typeof(NPCConversation), "StartConversation")]
