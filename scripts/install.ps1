@@ -70,6 +70,7 @@ $Strings = @{
         bepinexNeed   = "BepInEx не найден. Ставлю версию {0}."
         downloading   = "Скачиваю BepInEx (~33 МБ) с builds.bepinex.dev..."
         downloaded    = "Скачано {0} МБ за {1} с. Проверяю контрольную сумму..."
+        downloadProg  = "  {0,3}%  {1,5:N1} / {2:N1} МБ"
         downloadFail  = "Не удалось скачать BepInEx: {0}"
         downloadHint  = "Проверь интернет. Либо положи рядом с установщиком файл BepInEx-Unity.IL2CPP-win-x64-*.zip и запусти снова."
         usingLocal    = "Использую локальный архив BepInEx: {0}"
@@ -106,6 +107,7 @@ $Strings = @{
         bepinexNeed   = "BepInEx was not found. Installing version {0}."
         downloading   = "Downloading BepInEx (~33 MB) from builds.bepinex.dev..."
         downloaded    = "Downloaded {0} MB in {1} s. Verifying the checksum..."
+        downloadProg  = "  {0,3}%  {1,5:N1} / {2:N1} MB"
         downloadFail  = "Could not download BepInEx: {0}"
         downloadHint  = "Check your connection. Or put a BepInEx-Unity.IL2CPP-win-x64-*.zip next to the installer and run it again."
         usingLocal    = "Using the local BepInEx archive: {0}"
@@ -315,6 +317,57 @@ function Get-LocalBepInExArchive {
     return $null
 }
 
+# Downloads a file while drawing a single-line progress bar (percent + MB).
+# Invoke-WebRequest is avoided on purpose: its built-in progress bar throttles
+# the transfer badly in Windows PowerShell 5.1, and it cannot show a clean
+# percentage here. This loop reads the response in 1 MB chunks, so it stays at
+# full speed and prints real progress.
+function Save-RemoteFile([string]$url, [string]$path, [string]$progressFormat) {
+    $request = [System.Net.HttpWebRequest]::Create($url)
+    $request.UserAgent = "PeripeteiaCoop-Installer"
+    $request.Timeout = 600000
+    $request.ReadWriteTimeout = 600000
+
+    $response = $null
+    $input = $null
+    $output = $null
+    try {
+        $response = $request.GetResponse()
+        $total = $response.ContentLength
+        $input = $response.GetResponseStream()
+        $output = [System.IO.File]::Create($path)
+
+        $buffer = New-Object byte[] 1048576
+        $read = 0L
+        $lastPercent = -1
+        $lastChunk = 0L
+        while (($count = $input.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $output.Write($buffer, 0, $count)
+            $read += $count
+
+            if ($total -gt 0) {
+                $percent = [int](100 * $read / $total)
+                if ($percent -ne $lastPercent) {
+                    $lastPercent = $percent
+                    Write-Host -NoNewline ($progressFormat -f $percent, ($read / 1MB), ($total / 1MB))
+                }
+            } elseif ($read - $lastChunk -ge 4MB) {
+                $lastChunk = $read
+                Write-Host -NoNewline ($progressFormat -f 0, ($read / 1MB), ($read / 1MB))
+            }
+        }
+
+        if ($total -gt 0 -and $lastPercent -lt 100) {
+            Write-Host -NoNewline ($progressFormat -f 100, ($total / 1MB), ($total / 1MB))
+        }
+        Write-Host ""
+    } finally {
+        if ($output)   { $output.Dispose() }
+        if ($input)    { $input.Dispose() }
+        if ($response) { $response.Dispose() }
+    }
+}
+
 function Install-BepInEx([string]$game) {
     $zip = Get-LocalBepInExArchive
     if ($zip) {
@@ -325,7 +378,7 @@ function Install-BepInEx([string]$game) {
         $started = Get-Date
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri $BepInExUrl -OutFile $zip -UseBasicParsing -TimeoutSec 600
+            Save-RemoteFile -url $BepInExUrl -path $zip -progressFormat (T 'downloadProg')
         } catch {
             Fail ((T 'downloadFail') -f $_.Exception.Message)
             Warn (T 'downloadHint')
