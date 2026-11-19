@@ -804,6 +804,11 @@ internal sealed class RemoteAvatar
 
     private void ApplyWeaponSupportHand(float weight)
     {
+        if (_weaponLeftGrab != null && !IsLive(_weaponLeftGrab))
+        {
+            _weaponLeftGrab = null;
+        }
+
         if (!_weaponVisible ||
             _weaponOneHanded ||
             _weaponLeftGrab == null ||
@@ -913,6 +918,14 @@ internal sealed class RemoteAvatar
         if (_weaponIk == null)
         {
             return;
+        }
+
+        // A weapon destroyed under us (a respawn rebuilds the local body the
+        // puppet was cloned from) leaves _weaponLeftGrab pointing at a dead
+        // transform; drop it so the IK stops grabbing at nothing.
+        if (_weaponLeftGrab != null && !IsLive(_weaponLeftGrab))
+        {
+            _weaponLeftGrab = null;
         }
 
         bool active = _weaponVisible &&
@@ -1456,6 +1469,28 @@ internal sealed class RemoteAvatar
         _weaponRightGrab = null;
         _weaponLeftGrab = null;
         _weaponIk?.Clear();
+    }
+
+    /// <summary>
+    /// True when a Unity object still has a live native counterpart. A destroyed
+    /// object can survive as a non-null IL2CPP wrapper whose members throw, so a
+    /// plain "!= null" test is not enough to know a transform is usable.
+    /// </summary>
+    private static bool IsLive(Transform? transform)
+    {
+        if (transform == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return transform.gameObject != null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private static void ClearSlotChildren(Transform parent)
@@ -2577,6 +2612,11 @@ internal sealed class RemoteAvatar
         {
             _gameAnimator.enabled = true;
         }
+
+        // The body may have been rebuilt while it was down; make sure the
+        // support-hand IK is still attached and pointing at a live weapon.
+        EnsureWeaponIk();
+        UpdateWeaponIk();
 
         // Snap to the sender's current transform: the ragdoll moved the body
         // away from it, and the puppet must reappear where the revived player

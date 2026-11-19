@@ -34,6 +34,26 @@ internal static class DeathRespawn
     private static float _deliberateLoadTime;
     private static string _scene = string.Empty;
     private static bool _sceneRecorded;
+    private static bool[]? _savedAugs;
+
+    // The held weapon and where it sat while the player was alive. On death the
+    // game drops the gun (its parent becomes the world, not the hand slot) and
+    // the full reload that would normally put it back is exactly what we skip,
+    // so the respawned body is left empty-handed and its support-hand IK grabs
+    // at the gun still lying where the player fell. Remembering the last good
+    // pose lets the respawn put the gun back where it belongs.
+    private static Transform? _heldWeapon;
+    private static Vector3 _heldWeaponLocalPosition;
+    private static Quaternion _heldWeaponLocalRotation = Quaternion.identity;
+    private static Vector3 _heldWeaponLocalScale = Vector3.one;
+    private static bool _hasHeldWeapon;
+    private static PlayerShootScript? _shootCache;
+
+    // The body and the weapon settle over a few frames after the game rebuilds
+    // the player, so the repairs keep running for a short while after a respawn.
+    private static int _postRespawnFrames;
+
+    private const int PostRespawnFrames = 30;
 
     /// <summary>
     /// How long a deliberate-load mark stays valid. The mark is set just before
@@ -78,6 +98,9 @@ internal static class DeathRespawn
         _scene = string.Empty;
         _sceneRecorded = false;
         _hasSavePoint = false;
+        _postRespawnFrames = 0;
+        _hasHeldWeapon = false;
+        _shootCache = null;
     }
 
     /// <summary>Watches for level changes so each scene gets its own save point.</summary>
@@ -104,6 +127,8 @@ internal static class DeathRespawn
             _sceneRecorded = false;
             _hasSavePoint = false;
             _deliberateLoad = false;
+            _hasHeldWeapon = false;
+            _shootCache = null;
         }
 
         if (!_sceneRecorded && localPlayer != null && localPlayer.gameObject != null)
@@ -111,6 +136,11 @@ internal static class DeathRespawn
             _sceneRecorded = true;
             RecordSavePoint("level start");
         }
+
+        // Keep the last good gun pose while the player is alive and holding it,
+        // and finish the respawn repairs over the next few frames.
+        CaptureHeldWeapon(localPlayer);
+        ApplyPostRespawn(localPlayer);
     }
 
     /// <summary>Records the spot the player saved at, used as the respawn point.</summary>
@@ -245,6 +275,17 @@ internal static class DeathRespawn
             health.Conciousness = health.maxConciousness;
         }
 
+        // The game's death-load normally restores these from the save; skipping
+        // that load would leave the per-limb damage, the ability state and the
+        // dropped weapon behind, so put them back by hand. The rebuilt body keeps
+        // settling for a few frames, so the same repairs are repeated from Tick
+        // for a short while after this.
+        ResetBodyDamage(player, true);
+        RestoreAbilities(player);
+        RestoreHeldWeapon(player);
+        health.forceUIUpdate();
+        _postRespawnFrames = PostRespawnFrames;
+
         // NOTE: never call deathScreen.Revive() from here. This prefix runs
         // *inside* DEAD.Revive() - the death screen is the only caller of
         // LoadProcedureFromDeath - and that method already rebuilt the player
@@ -264,6 +305,310 @@ internal static class DeathRespawn
             $"(world kept, no reload)."
         );
         return true;
+    }
+
+    /// <summary>
+    /// Remembers which abilities (augs) the player had switched on. The game
+    /// rebuilds the body when the player comes back from death, and the fresh
+    /// AugSelect starts with its icons and its effects out of step: the icon
+    /// shows the pre-death state while the effect is off, and the next keypress
+    /// flips them the wrong way round. Capturing the state before the rebuild
+    /// lets <see cref="RestoreAbilities"/> put it back exactly.
+    /// </summary>
+    public static void CaptureAbilities(PlayerMovement? localPlayer)
+    {
+        _savedAugs = null;
+        if (!Enabled)
+        {
+            return;
+        }
+
+        try
+        {
+            AugSelect? augs = FindAugSelect(localPlayer);
+            _savedAugs = augs?.serializeAugs();
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] could not read the ability state: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    private static void RestoreAbilities(PlayerMovement player)
+    {
+        try
+        {
+            AugSelect? augs = FindAugSelect(player);
+            if (augs == null)
+            {
+                return;
+            }
+
+            // Start from a consistent state (icon and effect both off), then
+            // switch back on what the player had before dying.
+            augs.ForceAllAugsOff();
+
+            int restored = 0;
+            bool[]? saved = _savedAugs;
+            if (saved != null)
+            {
+                for (int i = 0; i < saved.Length; i++)
+                {
+                    if (saved[i])
+                    {
+                        augs.deserializeAug(i, true);
+                        restored++;
+                    }
+                }
+            }
+
+            augs.forceUIUpdate();
+
+            CoopPlugin.LogSource.LogInfo(
+                $"[death] ability state reset after respawn ({restored} restored)."
+            );
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] could not restore the ability state: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    private static AugSelect? FindAugSelect(PlayerMovement? player)
+    {
+        if (player != null && player.gameObject != null)
+        {
+            AugSelect? onPlayer = player.GetComponentInChildren<AugSelect>(true);
+            if (onPlayer != null)
+            {
+                return onPlayer;
+            }
+        }
+
+        return UnityEngine.Object.FindObjectOfType<AugSelect>();
+    }
+
+    /// <summary>
+    /// Clears the per-limb damage left over from the death. The body figure and
+    /// the limb hitboxes keep the values they had when the player died, so
+    /// without this a respawn still shows the old wrecked body. The game's own
+    /// <c>healLimb</c> is used first so its HUD and hitbox bookkeeping run, then
+    /// the raw arrays are forced for anything the heal path skips.
+    /// </summary>
+    private static void ResetBodyDamage(PlayerMovement player, bool log)
+    {
+        try
+        {
+            PlayerHealth? body = player.GetComponentInChildren<PlayerHealth>(true);
+            if (body == null)
+            {
+                body = UnityEngine.Object.FindObjectOfType<PlayerHealth>();
+            }
+
+            if (body == null)
+            {
+                return;
+            }
+
+            int[]? amounts = body.HealthAmounts;
+            int[]? maxima = body.maxHealthAmounts;
+            int count = 0;
+            if (amounts != null && maxima != null)
+            {
+                count = Math.Min(amounts.Length, maxima.Length);
+                for (int i = 0; i < count; i++)
+                {
+                    if (amounts[i] < maxima[i])
+                    {
+                        body.healLimb(i, maxima[i] - amounts[i]);
+                    }
+                }
+
+                for (int i = 0; i < count; i++)
+                {
+                    amounts[i] = maxima[i];
+                }
+            }
+
+            body.drawLimbs();
+            body.healthEffectUpdate();
+
+            if (log)
+            {
+                CoopPlugin.LogSource.LogInfo(
+                    $"[death] cleared per-limb damage on respawn ({count} limbs)."
+                );
+            }
+        }
+        catch (Exception exception)
+        {
+            if (log)
+            {
+                CoopPlugin.LogSource.LogWarning(
+                    $"[death] could not reset the body damage: " +
+                    $"{exception.GetType().Name}: {exception.Message}"
+                );
+            }
+        }
+    }
+
+    /// <summary>
+    /// Repeats the respawn repairs for a few frames: the game rebuilds the
+    /// player body and re-settles its weapon over several frames, so a single
+    /// pass can land on the wrong instance.
+    /// </summary>
+    private static void ApplyPostRespawn(PlayerMovement? localPlayer)
+    {
+        if (_postRespawnFrames <= 0 || localPlayer == null || localPlayer.gameObject == null)
+        {
+            return;
+        }
+
+        _postRespawnFrames--;
+        ResetBodyDamage(localPlayer, false);
+        RestoreHeldWeapon(localPlayer);
+    }
+
+    /// <summary>
+    /// Remembers the gun the local player is holding and the local transform it
+    /// had while it was properly attached to the hand slot. Only a correctly
+    /// attached pose is remembered, so the dropped pose from the death frame is
+    /// never captured.
+    /// </summary>
+    private static void CaptureHeldWeapon(PlayerMovement? localPlayer)
+    {
+        if (localPlayer == null || localPlayer.gameObject == null)
+        {
+            return;
+        }
+
+        try
+        {
+            PlayerShootScript? shoot = _shootCache;
+            if (!IsLive(shoot))
+            {
+                shoot = localPlayer.GetComponentInChildren<PlayerShootScript>(true);
+                if (shoot == null)
+                {
+                    shoot = localPlayer.GetComponentInParent<PlayerShootScript>();
+                }
+
+                _shootCache = shoot;
+            }
+
+            Transform? held = shoot != null ? shoot.currentlyHeld : null;
+            Transform? slot = localPlayer.WeaponLocation;
+            if (held == null || slot == null || !IsLive(held) || !IsLive(slot))
+            {
+                return;
+            }
+
+            if (held.parent != slot)
+            {
+                // Not in the hand slot (holstered or dropped): keep the last
+                // good pose instead of recording a bad one.
+                return;
+            }
+
+            _heldWeapon = held;
+            _heldWeaponLocalPosition = held.localPosition;
+            _heldWeaponLocalRotation = held.localRotation;
+            _heldWeaponLocalScale = held.localScale;
+            _hasHeldWeapon = true;
+        }
+        catch (Exception)
+        {
+            // Capturing is best-effort; a failure just means no repair later.
+        }
+    }
+
+    /// <summary>
+    /// Puts the held weapon back into the respawned body's hand slot. On death
+    /// the game drops the gun and only the skipped scene reload would normally
+    /// pick it back up, which leaves the support-hand IK grabbing at the gun on
+    /// the ground.
+    /// </summary>
+    private static void RestoreHeldWeapon(PlayerMovement player)
+    {
+        if (!_hasHeldWeapon)
+        {
+            return;
+        }
+
+        try
+        {
+            Transform? gun = _heldWeapon;
+            if (gun == null || !IsLive(gun))
+            {
+                _hasHeldWeapon = false;
+                return;
+            }
+
+            // If the rebuilt body already holds a different weapon that is
+            // properly attached, leave it alone rather than adding a second gun.
+            PlayerShootScript? shoot = player.GetComponentInChildren<PlayerShootScript>(true);
+            Transform? current = shoot != null ? shoot.currentlyHeld : null;
+            if (current != null && current != gun && IsLive(current) &&
+                current.IsChildOf(player.transform))
+            {
+                _hasHeldWeapon = false;
+                return;
+            }
+
+            if (gun.IsChildOf(player.transform))
+            {
+                // The game put it back itself (or our earlier pass did).
+                return;
+            }
+
+            Transform? slot = player.WeaponLocation;
+            if (slot == null || !IsLive(slot))
+            {
+                return;
+            }
+
+            gun.SetParent(slot, false);
+            gun.localPosition = _heldWeaponLocalPosition;
+            gun.localRotation = _heldWeaponLocalRotation;
+            gun.localScale = _heldWeaponLocalScale;
+
+            CoopPlugin.LogSource.LogInfo("[death] re-attached the held weapon after respawn.");
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] could not re-attach the held weapon: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
+    /// <summary>
+    /// True when a Unity object still has a live native counterpart. A destroyed
+    /// object can survive as a non-null IL2CPP wrapper whose members throw, so a
+    /// plain "!= null" test is not enough to know an object is usable.
+    /// </summary>
+    private static bool IsLive(Component? value)
+    {
+        if (value == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return value.gameObject != null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private static void Teleport(Transform target, Vector3 position, float yaw)

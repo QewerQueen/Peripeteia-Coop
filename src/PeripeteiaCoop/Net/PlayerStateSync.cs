@@ -103,6 +103,13 @@ internal static class PlayerStateSync
         _nextResendTime = Time.unscaledTime + ResendInterval;
         _deathsSent++;
 
+        if (dead && changed)
+        {
+            // Remember the abilities the player had, so the respawn can put them
+            // back instead of leaving the icon and the effect out of step.
+            DeathRespawn.CaptureAbilities(localPlayer);
+        }
+
         if (!dead)
         {
             // Back on our feet: forget the carried-corpse rig so a later death
@@ -117,10 +124,13 @@ internal static class PlayerStateSync
             localPlayer.transform.rotation
         );
 
-        CoopPlugin.LogSource.LogInfo(
-            $"[death] local player {(dead ? "died" : "revived")} at " +
-            $"{localPlayer.transform.position}."
-        );
+        if (changed)
+        {
+            CoopPlugin.LogSource.LogInfo(
+                $"[death] local player {(dead ? "died" : "revived")} at " +
+                $"{localPlayer.transform.position}."
+            );
+        }
     }
 
     public static void Apply(int id, bool dead, Vector3 position, Quaternion rotation)

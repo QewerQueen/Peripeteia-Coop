@@ -23,7 +23,7 @@ public sealed class RemoteWeaponIK : MonoBehaviour
     private bool _loggedCallback;
     private bool _loggedActive;
     private bool _loggedTarget;
-    private bool _loggedError;
+    private float _nextErrorLogTime;
 
     public void Configure(Animator animator, Vector3 handRotationMod)
     {
@@ -39,9 +39,12 @@ public sealed class RemoteWeaponIK : MonoBehaviour
             return;
         }
 
-        _leftUpperArm ??= _animator.GetBoneTransform(HumanBodyBones.LeftUpperArm);
-        _leftLowerArm ??= _animator.GetBoneTransform(HumanBodyBones.LeftLowerArm);
-        _leftHand ??= _animator.GetBoneTransform(HumanBodyBones.LeftHand);
+        // Re-read every call: a bone can be destroyed with the body it came from
+        // (a respawn swaps the local model the puppet was cloned from), and a
+        // cached dead transform would keep the support hand grabbing at nothing.
+        _leftUpperArm = _animator.GetBoneTransform(HumanBodyBones.LeftUpperArm);
+        _leftLowerArm = _animator.GetBoneTransform(HumanBodyBones.LeftLowerArm);
+        _leftHand = _animator.GetBoneTransform(HumanBodyBones.LeftHand);
     }
 
     public void SetHandRotationMod(Vector3 handRotationMod)
@@ -182,17 +185,25 @@ public sealed class RemoteWeaponIK : MonoBehaviour
         }
         catch (Exception exception)
         {
-            if (!_loggedError)
+            // Drop every cached reference so the next frame re-reads them from
+            // the live Animator instead of a stale IL2CPP wrapper. Without this a
+            // single bad reference left the support hand disabled for good.
+            _leftUpperArm = null;
+            _leftLowerArm = null;
+            _leftHand = null;
+            _weight = 0.0f;
+            _targetActive = false;
+            _loggedActive = false;
+            _loggedTarget = false;
+
+            if (Time.unscaledTime >= _nextErrorLogTime)
             {
-                _loggedError = true;
+                _nextErrorLogTime = Time.unscaledTime + 5.0f;
                 CoopPlugin.LogSource.LogWarning(
-                    $"[avatar] weapon IK disabled after error on '{name}': " +
+                    $"[avatar] weapon IK error on '{name}': " +
                     $"{exception.GetType().Name}: {exception.Message}"
                 );
             }
-
-            _targetActive = false;
-            _weight = 0.0f;
         }
     }
 
