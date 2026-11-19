@@ -80,6 +80,14 @@ internal sealed class CoopSettings
     public bool SaveTest { get; private set; }
 
     /// <summary>
+    /// Debug-only solo test mode: force the local player to die once the level
+    /// has streamed in, so the co-op death respawn (respawn at the save point,
+    /// world kept, no reload) can be retested on one machine. Never enabled
+    /// unless -coop-death-test is passed.
+    /// </summary>
+    public bool DeathTest { get; private set; }
+
+    /// <summary>
     /// Debug-only solo test mode: the name of a key/quest item to pick up once in
     /// a level, so a retest can prove that a key picked up by one player stays in
     /// the other player's world instead of vanishing. Never set unless
@@ -221,6 +229,11 @@ internal sealed class CoopSettings
                 case "-coop-save-test":
                 case "--coop-save-test":
                     settings.SaveTest = true;
+                    break;
+
+                case "-coop-death-test":
+                case "--coop-death-test":
+                    settings.DeathTest = true;
                     break;
 
                 case "-coop-key-test":

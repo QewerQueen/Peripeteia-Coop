@@ -262,6 +262,9 @@ BepInEx/LogOutput.1.log
 [death] remote 1 is back up.
 [death] save point (level start) recorded at (x, y, z).
 [death] respawned at the save point (x, y, z) (world kept, no reload).
+[death] the game's death load is running (reentrant=False, deliberate=False).
+[death] the player is still down after the respawn window; using the game's load.
+[combat] took 20 NPC damage headshot=False point=(x, y, z) hp=63/100 (1/12)
 [scene] level transition to 'level2' shared with the other player.
 [scene] following the other player to 'level2'.
 [story] quest '...': applied item reward 'ItemInfo.pickupitem'.

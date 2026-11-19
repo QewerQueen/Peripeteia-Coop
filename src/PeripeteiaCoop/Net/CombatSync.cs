@@ -793,7 +793,7 @@ internal static class CombatSync
             _npcDamageLogged++;
             CoopPlugin.LogSource.LogInfo(
                 $"[combat] took {amount} NPC damage headshot={headshot} point={point} " +
-                $"hp={health.HP} ({_npcDamageLogged}/{NpcHitLogLimit})"
+                $"hp={health.HP}/{SafeMaxHp(health)} ({_npcDamageLogged}/{NpcHitLogLimit})"
             );
         }
         else if (CoopPlugin.ProbeEnabled)
@@ -803,6 +803,18 @@ internal static class CombatSync
                 $"[combat] took {amount} damage from {source} " +
                 $"headshot={headshot} point={point} hp={(health != null ? health.HP : 0)}"
             );
+        }
+    }
+
+    private static int SafeMaxHp(HealthScript health)
+    {
+        try
+        {
+            return health.maxHP;
+        }
+        catch (Exception)
+        {
+            return 0;
         }
     }
 

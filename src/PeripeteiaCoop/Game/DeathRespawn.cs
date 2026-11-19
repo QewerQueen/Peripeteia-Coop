@@ -30,6 +30,8 @@ internal static class DeathRespawn
     private static Vector3 _savePosition;
     private static float _saveYaw;
     private static bool _respawning;
+    private static bool _lastTryReentrant;
+    private static bool _lastTryDeliberate;
     private static bool _deliberateLoad;
     private static float _deliberateLoadTime;
     private static string _scene = string.Empty;
@@ -88,6 +90,48 @@ internal static class DeathRespawn
     /// bookkeeping, not a real rollback, so it must not be shared.
     /// </summary>
     public static bool IsRespawning => _respawning;
+
+    /// <summary>
+    /// True when the last <see cref="TryRespawn"/> was a re-entry from inside
+    /// the respawn itself (the game's own load bookkeeping calling back in).
+    /// That load must not be treated as a rollback of the shared world.
+    /// </summary>
+    public static bool LastTryReentrant => _lastTryReentrant;
+
+    /// <summary>
+    /// True when the last <see cref="TryRespawn"/> stood aside because the
+    /// player (or the host) deliberately loaded a save.
+    /// </summary>
+    public static bool LastTryDeliberate => _lastTryDeliberate;
+
+    /// <summary>
+    /// True while the local player is dead or unconscious - i.e. the game's
+    /// death flow is running. Lets the load patches tell the game's own death
+    /// reload apart from a deliberate save rollback.
+    /// </summary>
+    public static bool LocalPlayerIsDown()
+    {
+        try
+        {
+            PlayerMovement? player = UnityEngine.Object.FindObjectOfType<PlayerMovement>();
+            if (player == null || player.gameObject == null)
+            {
+                return false;
+            }
+
+            HealthScript? health = player.GetComponent<HealthScript>();
+            if (health == null)
+            {
+                health = player.GetComponentInParent<HealthScript>();
+            }
+
+            return health != null && (health.dead || health.unconcious);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// Called when a save is loaded (by either machine) so the respawn point is
@@ -191,9 +235,14 @@ internal static class DeathRespawn
         if (_respawning)
         {
             // A revive path re-entered the load; let it through this once so we
-            // cannot loop.
+            // cannot loop, but remember it was not a rollback.
+            _lastTryReentrant = true;
+            _lastTryDeliberate = false;
             return true;
         }
+
+        _lastTryReentrant = false;
+        _lastTryDeliberate = false;
 
         if (_deliberateLoad)
         {
@@ -205,6 +254,7 @@ internal static class DeathRespawn
                 // The player (or the host) is deliberately loading a save: the
                 // shared world has to be rebuilt, so the respawn must stand
                 // aside.
+                _lastTryDeliberate = true;
                 return true;
             }
         }
@@ -296,8 +346,57 @@ internal static class DeathRespawn
 
         if (health.dead)
         {
-            // The game put the player straight back down; use the normal load.
-            return false;
+            // The first HandleLoad can run before the game has finished tearing
+            // the death state down. Bailing out here hands the whole thing back
+            // to the game's scene reload, which rewinds the shared world (dead
+            // NPCs back on their feet, story locks cleared) for both players.
+            // Try the revive once more before giving up.
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] still flagged dead after the first pass " +
+                $"(hp={health.HP}/{health.maxHP} unconcious={health.unconcious} " +
+                $"fallen={health.fallen}); retrying the revive."
+            );
+
+            try
+            {
+                health.HandleLoad(false, false);
+            }
+            catch (Exception)
+            {
+                // Fall through to the forced flags below.
+            }
+
+            health.dead = false;
+            health.unconcious = false;
+            health.fallen = false;
+            if (health.maxHP > 0)
+            {
+                health.HP = health.maxHP;
+            }
+
+            if (health.maxConciousness > 0)
+            {
+                health.Conciousness = health.maxConciousness;
+            }
+
+            health.forceUIUpdate();
+        }
+
+        if (health.dead)
+        {
+            // The game can set the flag back on for a frame or two after the
+            // revive (its death coroutines are still running). Bailing out to
+            // the full load here is exactly what rewound the shared world -
+            // dead NPCs back on their feet, story locks cleared, and the player
+            // dying a second time. Instead the respawn stands and the
+            // post-respawn pass keeps clearing the flag; ApplyPostRespawn falls
+            // back to the game's load only if the player is still down when the
+            // window closes.
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] the flag came back right after the revive " +
+                $"(hp={health.HP}/{health.maxHP} unconcious={health.unconcious}); " +
+                $"holding the respawn and clearing it over the next frames."
+            );
         }
 
         CoopPlugin.LogSource.LogInfo(
@@ -471,8 +570,75 @@ internal static class DeathRespawn
         }
 
         _postRespawnFrames--;
+
+        // Keep the player on their feet. The game's death coroutines can set the
+        // flag back on for a frame or two after the revive; clearing it here is
+        // what keeps the respawn from being mistaken for a failure and handing
+        // the level back to a full reload.
+        HealthScript? health = FindHealth(localPlayer);
+        if (health != null && (health.dead || health.unconcious))
+        {
+            health.dead = false;
+            health.unconcious = false;
+            health.fallen = false;
+            if (health.maxHP > 0)
+            {
+                health.HP = health.maxHP;
+            }
+
+            if (health.maxConciousness > 0)
+            {
+                health.Conciousness = health.maxConciousness;
+            }
+
+            health.forceUIUpdate();
+        }
+
         ResetBodyDamage(localPlayer, false);
         RestoreHeldWeapon(localPlayer);
+
+        if (_postRespawnFrames == 0 && health != null && health.dead)
+        {
+            // Last resort: the player is still down after the whole window, so
+            // let the game's own load run rather than leave the game stuck. The
+            // deliberate-load mark makes TryRespawn stand aside for this one.
+            CoopPlugin.LogSource.LogWarning(
+                "[death] the player is still down after the respawn window; " +
+                "using the game's load."
+            );
+
+            try
+            {
+                MarkDeliberateLoad();
+                SaveHandler? handler = UnityEngine.Object.FindObjectOfType<SaveHandler>();
+                handler?.LoadProcedureFromDeath();
+            }
+            catch (Exception exception)
+            {
+                CoopPlugin.LogSource.LogWarning(
+                    $"[death] fallback load failed: " +
+                    $"{exception.GetType().Name}: {exception.Message}"
+                );
+            }
+        }
+    }
+
+    private static HealthScript? FindHealth(PlayerMovement player)
+    {
+        try
+        {
+            HealthScript? health = player.GetComponent<HealthScript>();
+            if (health == null)
+            {
+                health = player.GetComponentInParent<HealthScript>();
+            }
+
+            return health;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -670,10 +836,21 @@ internal static class DeathRespawnPatch
         bool runOriginal = DeathRespawn.TryRespawn();
         if (runOriginal)
         {
-            // The game is reloading the save after all (a failed respawn, or a
-            // deliberate rollback), so the world (and its story progress) is
-            // rebuilt; the one-time locks have to follow.
-            StorySync.ResetLocks("a load");
+            bool reentrant = DeathRespawn.LastTryReentrant;
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] the game's death load is running " +
+                $"(reentrant={reentrant}, deliberate={DeathRespawn.LastTryDeliberate})."
+            );
+
+            if (!reentrant)
+            {
+                // The game is reloading the save after all (a failed respawn,
+                // or a deliberate rollback), so the world (and its story
+                // progress) is rebuilt; the one-time locks have to follow. A
+                // re-entry from inside the respawn is not a rollback, so its
+                // locks stay put.
+                StorySync.ResetLocks("a load");
+            }
         }
 
         return runOriginal;

@@ -31,6 +31,7 @@ param(
     [string]$KeyTest = "",
     [switch]$StoryScan,
     [switch]$SaveTest,
+    [switch]$DeathTest,
     [switch]$ProceduralAnimation
 )
 
@@ -102,6 +103,10 @@ if ($StoryScan -and -not $NoCoop) {
 }
 if ($SaveTest -and -not $NoCoop) {
     $clientCoop += " -coop-save-test"
+}
+if ($DeathTest -and -not $NoCoop) {
+    $hostCoop += " -coop-death-test"
+    $clientCoop += " -coop-death-test"
 }
 if ($KeyTest -and -not $NoCoop) {
     $hostCoop += " -coop-key-test `"$KeyTest`""

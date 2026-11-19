@@ -240,6 +240,7 @@ internal static class SaveLoadProcedurePatch
             // rebuilt from the loaded world.
             DeathRespawn.OnLoad();
             StorySync.ResetLocks("the host loaded a save");
+            EnemySync.ResetForLoad();
             return true;
         }
 
@@ -257,6 +258,7 @@ internal static class SaveLoadProcedurePatch
 
             DeathRespawn.OnLoad();
             StorySync.ResetLocks("a save was loaded");
+            EnemySync.ResetForLoad();
             return true;
         }
 

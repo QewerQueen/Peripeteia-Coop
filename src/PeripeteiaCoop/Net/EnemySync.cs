@@ -433,6 +433,25 @@ internal static class EnemySync
         CoopPlugin.LogSource.LogInfo($"[ai] enemy sync tracking scene '{scene}'.");
     }
 
+    /// <summary>
+    /// Drops the mirrored enemy state after a save is loaded. A same-scene
+    /// reload keeps the scene name, so the normal scene check would not notice
+    /// it and the NPCs would keep the dead / aggressive state from before the
+    /// rollback (the "everything is still hostile after I load" bug). Clearing
+    /// here makes the mirror re-read the freshly loaded world instead.
+    /// </summary>
+    public static void ResetForLoad()
+    {
+        try
+        {
+            Reset(SceneManager.GetActiveScene().name);
+        }
+        catch (Exception)
+        {
+            // Best effort; the next Tick re-reads the scene anyway.
+        }
+    }
+
     private static void Refresh()
     {
         try

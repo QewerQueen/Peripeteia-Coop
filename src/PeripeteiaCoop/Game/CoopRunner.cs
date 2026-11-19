@@ -23,6 +23,9 @@ public sealed class CoopRunner : MonoBehaviour
     private float _nextKeyTestTime;
     private bool _saveTestDone;
     private float _nextSaveTestTime;
+    private bool _deathTestDone;
+    private int _deathTestPhase;
+    private float _nextDeathTestTime;
     private string _autosaveScene = string.Empty;
     private float _autosaveAt;
     private int _personalSaves;
@@ -51,6 +54,7 @@ public sealed class CoopRunner : MonoBehaviour
         TryStoryScan();
         TryKeyTest();
         TrySaveTest();
+        TryDeathTest();
         TryClientAutosave();
         CoopPlugin.Tick(_localPlayer);
     }
@@ -235,6 +239,107 @@ public sealed class CoopRunner : MonoBehaviour
             CoopPlugin.LogSource.LogWarning(
                 $"[test] save test failed: {exception.GetType().Name}: {exception.Message}"
             );
+        }
+    }
+
+    /// <summary>
+    /// Debug-only (-coop-death-test): kill the local player once the level has
+    /// streamed in, so the co-op death respawn can be retested on a single
+    /// machine. The respawn should put the player back at the save point with
+    /// the world untouched - no scene reload, no story locks cleared, no dead
+    /// NPCs back on their feet.
+    /// </summary>
+    private void TryDeathTest()
+    {
+        if (_deathTestDone || !CoopPlugin.Settings.DeathTest)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < _nextDeathTestTime)
+        {
+            return;
+        }
+
+        if (_deathTestPhase == 1)
+        {
+            // Phase 1: the death screen normally waits for the player to press
+            // the revive key; drive that same call so the patched respawn runs.
+            SaveHandler? reviveHandler = UnityEngine.Object.FindObjectOfType<SaveHandler>();
+            if (reviveHandler == null)
+            {
+                return;
+            }
+
+            _deathTestDone = true;
+            CoopPlugin.LogSource.LogInfo(
+                "[test] death test: calling SaveHandler.LoadProcedureFromDeath()."
+            );
+
+            try
+            {
+                reviveHandler.LoadProcedureFromDeath();
+            }
+            catch (Exception exception)
+            {
+                CoopPlugin.LogSource.LogWarning(
+                    $"[test] death test revive failed: {exception.GetType().Name}: {exception.Message}"
+                );
+            }
+
+            return;
+        }
+
+        if (_localPlayer == null || !_localPlayer.isActiveAndEnabled)
+        {
+            return;
+        }
+
+        SaveHandler? handler = UnityEngine.Object.FindObjectOfType<SaveHandler>();
+        if (handler == null || handler.onMainMenuScene)
+        {
+            return;
+        }
+
+        {
+            HealthScript? health = _localPlayer.GetComponent<HealthScript>();
+            if (health == null)
+            {
+                health = _localPlayer.GetComponentInParent<HealthScript>();
+            }
+
+            if (health == null)
+            {
+                return;
+            }
+
+            _deathTestPhase = 1;
+            _nextDeathTestTime = Time.unscaledTime + 3.0f;
+            CoopPlugin.LogSource.LogInfo(
+                $"[test] death test: forcing a local death (hp={health.HP}/{health.maxHP})."
+            );
+
+            try
+            {
+                // Apply lethal damage through the game's real path so the death
+                // screen and its revive run exactly as they would in a fight.
+                health.TakeDMG(
+                    false,
+                    health.maxHP + 9999,
+                    _localPlayer.transform,
+                    false,
+                    health.transform.position,
+                    false
+                );
+            }
+            catch (Exception exception)
+            {
+                CoopPlugin.LogSource.LogWarning(
+                    $"[test] death test failed: {exception.GetType().Name}: {exception.Message}"
+                );
+            }
+
+            return;
         }
     }
 
