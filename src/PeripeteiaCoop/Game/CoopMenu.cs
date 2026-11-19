@@ -399,7 +399,7 @@ public sealed class CoopMenu : MonoBehaviour
             CoopPlugin.LogSource.LogInfo(
                 $"[menu] drawing the panel at ({rect.x:F0},{rect.y:F0}) {width:F0}x{height:F0}, " +
                 $"screen {Screen.width}x{Screen.height}, build {PluginInfo.Version} " +
-                $"(game '{Application.version}')."
+                $"by desstrinity (game '{Application.version}')."
             );
         }
 
@@ -412,14 +412,15 @@ public sealed class CoopMenu : MonoBehaviour
         float w = rect.width - 40.0f;
         float y = rect.y + 16.0f;
 
-        // The build number sits in the title row so players can check that both
-        // sides run the same mod before connecting. It costs no extra vertical
-        // space, which matters with eight LAN hosts listed.
-        float titleW = w - 170.0f;
+        // The build number and the author credit sit in the title row so players
+        // can check that both sides run the same mod before connecting. It costs
+        // no extra vertical space, which matters with eight LAN hosts listed.
+        float creditW = 230.0f;
+        float titleW = w - creditW;
         GUI.Label(new Rect(x, y, titleW, 30.0f), "PERIPETEIA COOP", _titleStyle);
         GUI.Label(
-            new Rect(x + titleW, y, 170.0f, 30.0f),
-            $"Build {PluginInfo.Version}",
+            new Rect(x + titleW, y, creditW, 30.0f),
+            $"Build {PluginInfo.Version} - by desstrinity",
             _versionStyle
         );
         y += 34.0f;
