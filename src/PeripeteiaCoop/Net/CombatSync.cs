@@ -514,6 +514,18 @@ internal static class CombatSync
         return -1;
     }
 
+    /// <summary>
+    /// Re-applies the local-player collision policy to every live proxy. A
+    /// corpse switches its proxy off (so the solid capsules stop pushing the
+    /// ragdoll around) and back on when it revives; disabling and re-enabling a
+    /// collider can reset its <c>IgnoreCollision</c> pairs, so the policy has to
+    /// be written again afterwards.
+    /// </summary>
+    public static void RefreshCollisionPolicy()
+    {
+        ApplyCollisionPolicy();
+    }
+
     private static void ApplyCollisionPolicy()
     {
         if (_localController == null)

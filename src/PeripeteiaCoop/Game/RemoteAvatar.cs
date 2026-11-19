@@ -2117,6 +2117,44 @@ internal sealed class RemoteAvatar
         }
     }
 
+    /// <summary>
+    /// Switches the combat hit proxy (torso, head and limb capsules) on or off.
+    /// A corpse must not be shootable, and - more importantly - the proxy is a
+    /// solid kinematic collider built around the standing body: while the
+    /// ragdoll is simulated the proxy capsules overlap the ragdoll colliders and
+    /// the physics solver blasts the body away. Switching the proxy off for the
+    /// corpse removes that overlap.
+    /// </summary>
+    private void SetHitProxyActive(bool active)
+    {
+        if (_hitProxy == null || _hitProxy.gameObject == null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_hitProxy.gameObject.activeSelf != active)
+            {
+                _hitProxy.gameObject.SetActive(active);
+            }
+
+            if (active)
+            {
+                // Re-enabling the colliders can drop their IgnoreCollision pairs
+                // with the local player, so write the policy again.
+                CombatSync.RefreshCollisionPolicy();
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] could not toggle the hit proxy for remote {Id}: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
+    }
+
     private void EnterRagdoll(Vector3 position, Quaternion rotation)
     {
         if (_ragdollActive)
@@ -2143,6 +2181,11 @@ internal sealed class RemoteAvatar
         // The perception collider stands for a living body; a corpse must not
         // keep pretending to be a standing AI target.
         SetPerceptionActive(false);
+
+        // The combat proxy is a solid collider wrapped around the standing
+        // body. Left on, it overlaps the ragdoll colliders and launches the
+        // corpse across the level, so it goes off with the ragdoll.
+        SetHitProxyActive(false);
 
         if (!CoopPlugin.PlayerDeathRagdoll)
         {
@@ -2579,6 +2622,7 @@ internal sealed class RemoteAvatar
         _dragStart.Clear();
 
         SetPerceptionActive(true);
+        SetHitProxyActive(true);
 
         try
         {
