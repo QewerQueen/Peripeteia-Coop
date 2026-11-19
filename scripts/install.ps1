@@ -30,6 +30,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Windows PowerShell 5.1 draws a progress bar while Invoke-WebRequest downloads,
+# which throttles the transfer badly, and its verbose stream prints
+# "Writing request stream..." lines that make the download look stuck. Turn both
+# off so the ~33 MB BepInEx archive comes down at full speed and quietly.
+$ProgressPreference = "SilentlyContinue"
+$VerbosePreference  = "SilentlyContinue"
+
 # ---------------------------------------------------------------------------
 # Pinned BepInEx. This is the exact build the mod is tested against; do not
 # silently switch to "latest", a newer bleeding-edge build can break interop.
@@ -62,6 +69,7 @@ $Strings = @{
         bepinexOk     = "BepInEx уже установлен ({0})."
         bepinexNeed   = "BepInEx не найден. Ставлю версию {0}."
         downloading   = "Скачиваю BepInEx (~33 МБ) с builds.bepinex.dev..."
+        downloaded    = "Скачано {0} МБ за {1} с. Проверяю контрольную сумму..."
         downloadFail  = "Не удалось скачать BepInEx: {0}"
         downloadHint  = "Проверь интернет. Либо положи рядом с установщиком файл BepInEx-Unity.IL2CPP-win-x64-*.zip и запусти снова."
         usingLocal    = "Использую локальный архив BepInEx: {0}"
@@ -97,6 +105,7 @@ $Strings = @{
         bepinexOk     = "BepInEx is already installed ({0})."
         bepinexNeed   = "BepInEx was not found. Installing version {0}."
         downloading   = "Downloading BepInEx (~33 MB) from builds.bepinex.dev..."
+        downloaded    = "Downloaded {0} MB in {1} s. Verifying the checksum..."
         downloadFail  = "Could not download BepInEx: {0}"
         downloadHint  = "Check your connection. Or put a BepInEx-Unity.IL2CPP-win-x64-*.zip next to the installer and run it again."
         usingLocal    = "Using the local BepInEx archive: {0}"
@@ -313,14 +322,19 @@ function Install-BepInEx([string]$game) {
     } else {
         $zip = Join-Path $env:TEMP ("PeripeteiaCoop-BepInEx-" + [guid]::NewGuid().ToString("N") + ".zip")
         Step ((T 'downloading'))
+        $started = Get-Date
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri $BepInExUrl -OutFile $zip -UseBasicParsing
+            Invoke-WebRequest -Uri $BepInExUrl -OutFile $zip -UseBasicParsing -TimeoutSec 600
         } catch {
             Fail ((T 'downloadFail') -f $_.Exception.Message)
             Warn (T 'downloadHint')
             Pause-Exit 1
         }
+
+        $mb  = [math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
+        $sec = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
+        Ok ((T 'downloaded') -f $mb, $sec)
     }
 
     $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
