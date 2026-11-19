@@ -482,7 +482,11 @@ public sealed class CoopRunner : MonoBehaviour
                 CoopPlugin.LogSource.LogInfo(
                     $"[test] loot test #{_lootTests}: removing first item from corpse '{BuildPath(c.transform)}'."
                 );
-                c.removeItem(item);
+                // The demo has no container.removeItem for the Harmony patch to
+                // hook, so announce the pickup explicitly here. The 1.5 s de-dupe
+                // in ContainerSync collapses the extra call on the full build.
+                ContainerSync.OnLocalLoot(c, item);
+                ContainerSync.RemoveItem(c, item);
                 break;
             }
         }
@@ -545,7 +549,7 @@ public sealed class CoopRunner : MonoBehaviour
                 CoopPlugin.LogSource.LogInfo(
                     $"[test]   container '{BuildPath(c.transform)}' active={c.gameObject.activeInHierarchy} " +
                     $"objects={objects} contained={contained} looted={c.looted} shop={c.isShop} " +
-                    $"physical={c.physicalSpace} attachedHealth={c.attachedHealth != null} " +
+                    $"attachedHealth={c.attachedHealth != null} " +
                     $"lootTransform={c.lootTransform != null}"
                 );
 

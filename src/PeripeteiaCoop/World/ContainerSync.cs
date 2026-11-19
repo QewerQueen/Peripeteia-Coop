@@ -38,6 +38,71 @@ internal static class ContainerSync
     public static int Sent => _sent;
     public static int Applied => _applied;
 
+    /// <summary>
+    /// Removes an item using the game's own method when the installed build has
+    /// it. The demo's interop set does not expose <c>container.removeItem</c>, so
+    /// there is a list-level fallback for that build. Either way the loot UI is
+    /// refreshed, and an already-running Harmony patch is harmless because the
+    /// remote-replay guard is set while this runs.
+    /// </summary>
+    public static void RemoveItem(container owner, ItemInfo item)
+    {
+        try
+        {
+            System.Reflection.MethodInfo? method = null;
+            foreach (System.Reflection.MethodInfo candidate in typeof(container).GetMethods(
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic
+            ))
+            {
+                if (candidate.Name != "removeItem")
+                {
+                    continue;
+                }
+
+                System.Reflection.ParameterInfo[] parameters = candidate.GetParameters();
+                if (parameters.Length == 1 && parameters[0].ParameterType == typeof(ItemInfo))
+                {
+                    method = candidate;
+                    break;
+                }
+            }
+
+            if (method != null)
+            {
+                method.Invoke(owner, new object[] { item });
+                return;
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[loot] native removal failed ({exception.GetType().Name}); using list fallback."
+            );
+        }
+
+        RemoveFromList(owner.objectsContained, item);
+        RemoveFromList(owner.objects, item);
+        owner.refreshUI();
+    }
+
+    private static void RemoveFromList(Il2CppSystem.Collections.Generic.List<ItemInfo>? list, ItemInfo item)
+    {
+        if (list == null)
+        {
+            return;
+        }
+
+        for (int i = list.Count - 1; i >= 0; i--)
+        {
+            if (ReferenceEquals(list[i], item))
+            {
+                list.RemoveAt(i);
+            }
+        }
+    }
+
     /// <summary>Called every network tick; clears per-level state on a scene change.</summary>
     public static void Tick()
     {
@@ -241,7 +306,7 @@ internal static class ContainerSync
         _applyingRemote = true;
         try
         {
-            owner.removeItem(item);
+            RemoveItem(owner, item);
             _applied++;
             CoopPlugin.LogSource.LogInfo(
                 $"[loot] applied remote removal of '{itemName}' from '{key}'."

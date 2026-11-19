@@ -435,6 +435,11 @@ internal static class EnemySync
             Targets.Remove(key);
             LastMirror.Remove(key);
 
+            // A death received from the other machine is already accounted for.
+            // Without this, the next PollDeaths sees the same ragdoll as a fresh
+            // local kill and announces it straight back, producing an echo storm.
+            AnnouncedDead.Add(key);
+
             CoopPlugin.LogSource.LogInfo(
                 $"[ai] applied remote death key='{key}' (dead={health.dead}, ragdoll={RagdollState(enemy)})."
             );
