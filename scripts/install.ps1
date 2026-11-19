@@ -78,6 +78,7 @@ $Strings = @{
         hashBad       = "Контрольная сумма BepInEx не совпала (ожидалось {0}). Установка остановлена ради безопасности."
         extracting    = "Распаковываю BepInEx в папку игры..."
         bepinexDone   = "BepInEx установлен."
+        unityLibs     = "Нашёл библиотеки Unity ({0}) — кладу их в unity-libs, чтобы BepInEx не качал их из интернета."
         modMissing    = "Не нашёл файлы мода (PeripeteiaCoop.dll) рядом с установщиком. Скачай архив мода целиком и распакуй перед запуском."
         copyingMod    = "Копирую мод в игру..."
         copiedMod     = "Мод скопирован в BepInEx\plugins\PeripeteiaCoop."
@@ -116,6 +117,7 @@ $Strings = @{
         hashBad       = "The BepInEx checksum did not match (expected {0}). Stopping the install for safety."
         extracting    = "Extracting BepInEx into the game folder..."
         bepinexDone   = "BepInEx installed."
+        unityLibs     = "Found the Unity base libraries ({0}) — placing them in unity-libs so BepInEx does not download them."
         modMissing    = "Could not find the mod files (PeripeteiaCoop.dll) next to the installer. Download the full mod archive and extract it before running."
         copyingMod    = "Copying the mod into the game..."
         copiedMod     = "The mod was copied to BepInEx\plugins\PeripeteiaCoop."
@@ -429,6 +431,34 @@ function Install-BepInEx([string]$game) {
     Ok (T 'bepinexDone')
 }
 
+function Install-UnityBaseLibraries([string]$game) {
+    # On first launch BepInEx downloads the managed Unity base libraries
+    # (<unityversion>.zip) from unity.bepinex.dev and hangs on networks where
+    # *.bepinex.dev is unreachable. BepInEx uses a local copy of that .zip when
+    # one is already present in BepInEx\unity-libs, so pre-seed it here if the
+    # player dropped the file next to the installer (or in Downloads).
+    $dirs = @(
+        $ScriptDir,
+        (Join-Path $RepoRoot "tools"),
+        (Join-Path $RepoRoot "local"),
+        (Join-Path $env:USERPROFILE "Downloads"),
+        (Join-Path $env:USERPROFILE "Desktop")
+    )
+    $found = @()
+    foreach ($dir in $dirs) {
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        $found += Get-ChildItem -LiteralPath $dir -Filter "*.zip" -File -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.zip$' }
+    }
+    if (-not $found) { return }
+
+    $pick = $found | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $target = Join-Path $game "BepInEx\unity-libs"
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    Copy-Item -LiteralPath $pick.FullName -Destination (Join-Path $target $pick.Name) -Force
+    Ok ((T 'unityLibs') -f $pick.Name)
+}
+
 function Get-ModPayload {
     # Release layout: the installer sits next to a staged BepInEx folder.
     $releaseDll = Join-Path $ScriptDir "BepInEx\plugins\PeripeteiaCoop\PeripeteiaCoop.dll"
@@ -517,6 +547,10 @@ if (Test-BepInExInstalled $game) {
     Step ((T 'bepinexNeed') -f $BepInExBuild)
     Install-BepInEx $game
 }
+
+# Unity base libraries (only matters when the player supplied them; otherwise
+# BepInEx downloads them on first launch).
+Install-UnityBaseLibraries $game
 
 # Mod files.
 $payload = Get-ModPayload
