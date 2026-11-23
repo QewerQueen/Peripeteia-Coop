@@ -1,8 +1,10 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using HarmonyLib;
 using LiteNetLib;
 using UnityEngine;
+using UnityEngine.AI;
 using UnityEngine.SceneManagement;
 
 namespace PeripeteiaCoop;
@@ -19,15 +21,29 @@ internal static class DoorSync
 {
     private sealed class DoorState
     {
-        public DoorState(bool open, bool locked)
+        public DoorState(bool open, bool locked, float openPercent, Quaternion localRotation)
         {
             Open = open;
             Locked = locked;
+            OpenPercent = openPercent;
+            LocalRotation = localRotation;
         }
 
         public bool Open { get; }
 
         public bool Locked { get; }
+
+        public float OpenPercent { get; }
+
+        public Quaternion LocalRotation { get; }
+
+        public bool NearlyEquals(DoorState other)
+        {
+            return Open == other.Open &&
+                   Locked == other.Locked &&
+                   Mathf.Abs(OpenPercent - other.OpenPercent) < 0.01f &&
+                   Quaternion.Angle(LocalRotation, other.LocalRotation) < 1.0f;
+        }
     }
 
     private static readonly Dictionary<string, doorScript> Doors = new();
@@ -121,14 +137,24 @@ internal static class DoorSync
                 continue;
             }
 
-            var state = new DoorState(door.open, door.locked);
+            var state = new DoorState(
+                door.open,
+                door.locked,
+                door.openpercent,
+                door.transform.localRotation
+            );
             bool changed = !LastSent.TryGetValue(pair.Key, out DoorState? previous) ||
-                           previous.Open != state.Open ||
-                           previous.Locked != state.Locked;
+                           !previous.NearlyEquals(state);
 
             if (fullSnapshot || changed)
             {
-                CoopPlugin.Network.SendDoorState(pair.Key, state.Open, state.Locked);
+                CoopPlugin.Network.SendDoorState(
+                    pair.Key,
+                    state.Open,
+                    state.Locked,
+                    state.OpenPercent,
+                    state.LocalRotation
+                );
                 LastSent[pair.Key] = state;
             }
         }
@@ -155,12 +181,19 @@ internal static class DoorSync
                 continue;
             }
 
-            CoopPlugin.Network.SendDoorStateTo(peer, pair.Key, door.open, door.locked);
-            LastSent[pair.Key] = new DoorState(door.open, door.locked);
+            CoopPlugin.Network.SendDoorStateTo(
+                peer,
+                pair.Key,
+                door.open,
+                door.locked,
+                door.openpercent,
+                door.transform.localRotation
+            );
+            LastSent[pair.Key] = new DoorState(door.open, door.locked, door.openpercent, door.transform.localRotation);
         }
     }
 
-    public static void Apply(string key, bool open, bool locked)
+    public static void Apply(string key, bool open, bool locked, float openPercent, Quaternion localRotation)
     {
         if (CoopPlugin.Settings.Role == CoopRole.Offline)
         {
@@ -182,31 +215,124 @@ internal static class DoorSync
         // overwrite host doors with stale local state.
         _syncedOnce = true;
 
-        if (door.open == open && door.locked == locked)
+        bool stateChanged = door.open != open || door.locked != locked;
+        if (stateChanged)
         {
-            LastSent[key] = new DoorState(open, locked);
-            return;
+            if (!open && door.open)
+            {
+                door.open = false;
+            }
+            else if (open && !door.open)
+            {
+                bool wasLocked = door.locked;
+                door.locked = false;
+                door.OpenDoor();
+                door.open = true;
+                door.locked = wasLocked;
+            }
+
+            door.locked = locked;
         }
 
-        if (!open && door.open)
+        // Keep NavMeshObstacle in sync with the applied door state, otherwise
+        // remote bots can path through a door that looks closed.
+        try
         {
-            door.open = false;
+            if (door.obstacle != null)
+            {
+                door.obstacle.enabled = !door.open && !door.destroyed;
+            }
         }
-        else if (open && !door.open)
+        catch (Exception)
         {
-            bool wasLocked = door.locked;
-            door.locked = false;
-            door.OpenDoor();
-            door.open = true;
-            door.locked = wasLocked;
+            // Ignore obstacle sync failures on unusual doors.
         }
 
-        door.locked = locked;
+        // Physical door hold (F): sync open percent and rotation so a door held
+        // half-open by one player moves on the other side too.
+        bool locallyHeld = IsLocallyHeld(door);
+        if (!locallyHeld)
+        {
+            if (Mathf.Abs(door.openpercent - openPercent) > 0.001f)
+            {
+                door.openpercent = openPercent;
+            }
 
-        // Suppress the echo: this change came from the peer, so do not send it
-        // straight back.
-        LastSent[key] = new DoorState(open, locked);
-        CoopPlugin.LogSource.LogInfo($"[doors] applied open={open} locked={locked}.");
+            if (Quaternion.Angle(door.transform.localRotation, localRotation) > 0.5f)
+            {
+                ApplyLocalRotation(door, localRotation);
+            }
+        }
+
+        LastSent[key] = new DoorState(open, locked, openPercent, localRotation);
+        if (stateChanged)
+        {
+            CoopPlugin.LogSource.LogInfo($"[doors] applied open={open} locked={locked}.");
+        }
+    }
+
+    private static bool IsLocallyHeld(doorScript door)
+    {
+        try
+        {
+            foreach (ObjectHighlight highlight in UnityEngine.Object.FindObjectsOfType<ObjectHighlight>())
+            {
+                if (highlight != null && highlight.isDragging && highlight.objectDragged != null)
+                {
+                    // ObjectHighlight holds a door via its doorHeld/door fields.
+                    // When a player drags a physics door, doorHeld is set.
+                    var traverse = Traverse.Create(highlight);
+                    bool doorHeld = traverse.Field("doorHeld").GetValue<bool>();
+                    doorScript? heldDoor = traverse.Field("door").GetValue<doorScript>();
+                    if (doorHeld && heldDoor == door)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // If we cannot determine local hold, prefer applying remote state.
+        }
+
+        return false;
+    }
+
+    private static void ApplyLocalRotation(doorScript door, Quaternion localRotation)
+    {
+        try
+        {
+            Rigidbody? body = door.GetComponent<Rigidbody>();
+            if (body == null)
+            {
+                body = door.GetComponentInChildren<Rigidbody>();
+            }
+
+            if (body != null && !body.isKinematic)
+            {
+                body.MoveRotation(door.transform.parent != null
+                    ? door.transform.parent.rotation * localRotation
+                    : localRotation);
+                body.velocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+            else
+            {
+                door.transform.localRotation = localRotation;
+            }
+        }
+        catch (Exception)
+        {
+            try
+            {
+                door.transform.localRotation = localRotation;
+            }
+            catch (Exception)
+            {
+                // Ignore broken door transforms.
+            }
+        }
     }
 
     private static void ToggleTestDoor()
@@ -246,7 +372,7 @@ internal static class DoorSync
 
     private static void Refresh()
     {
-        foreach (doorScript door in Object.FindObjectsOfType<doorScript>())
+        foreach (doorScript door in UnityEngine.Object.FindObjectsOfType<doorScript>())
         {
             Register(door);
         }

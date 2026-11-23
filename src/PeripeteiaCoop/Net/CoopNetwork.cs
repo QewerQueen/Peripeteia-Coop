@@ -540,7 +540,7 @@ internal sealed class CoopNetwork : IDisposable
         }
     }
 
-    public void SendDoorState(string key, bool open, bool locked)
+    public void SendDoorState(string key, bool open, bool locked, float openPercent, Quaternion localRotation)
     {
         if (_settings.Role == CoopRole.Offline || _net.ConnectedPeersCount == 0)
         {
@@ -548,7 +548,7 @@ internal sealed class CoopNetwork : IDisposable
         }
 
         var writer = new NetDataWriter();
-        WriteDoorState(writer, key, open, locked);
+        WriteDoorState(writer, key, open, locked, openPercent, localRotation);
 
         if (_settings.Role == CoopRole.Host)
         {
@@ -560,7 +560,7 @@ internal sealed class CoopNetwork : IDisposable
         host?.Send(writer, DeliveryMethod.ReliableOrdered);
     }
 
-    public void SendDoorStateTo(NetPeer peer, string key, bool open, bool locked)
+    public void SendDoorStateTo(NetPeer peer, string key, bool open, bool locked, float openPercent, Quaternion localRotation)
     {
         if (_settings.Role != CoopRole.Host)
         {
@@ -568,16 +568,27 @@ internal sealed class CoopNetwork : IDisposable
         }
 
         var writer = new NetDataWriter();
-        WriteDoorState(writer, key, open, locked);
+        WriteDoorState(writer, key, open, locked, openPercent, localRotation);
         peer.Send(writer, DeliveryMethod.ReliableOrdered);
     }
 
-    private static void WriteDoorState(NetDataWriter writer, string key, bool open, bool locked)
+    private static void WriteDoorState(
+        NetDataWriter writer,
+        string key,
+        bool open,
+        bool locked,
+        float openPercent,
+        Quaternion localRotation)
     {
         writer.Put((byte)PacketType.DoorState);
         writer.Put(key);
         writer.Put(open);
         writer.Put(locked);
+        writer.Put(openPercent);
+        writer.Put(localRotation.x);
+        writer.Put(localRotation.y);
+        writer.Put(localRotation.z);
+        writer.Put(localRotation.w);
     }
 
     /// <summary>
@@ -2948,12 +2959,24 @@ internal sealed class CoopNetwork : IDisposable
         string key = reader.GetString();
         bool open = reader.GetBool();
         bool locked = reader.GetBool();
+        float openPercent = 0.0f;
+        Quaternion localRotation = Quaternion.identity;
+        if (reader.AvailableBytes >= 20)
+        {
+            openPercent = reader.GetFloat();
+            localRotation = new Quaternion(
+                reader.GetFloat(),
+                reader.GetFloat(),
+                reader.GetFloat(),
+                reader.GetFloat()
+            );
+        }
 
         if (_settings.Role == CoopRole.Host)
         {
             // Relay a client's change to the other clients (3+ player sessions).
             var relay = new NetDataWriter();
-            WriteDoorState(relay, key, open, locked);
+            WriteDoorState(relay, key, open, locked, openPercent, localRotation);
             foreach (NetPeer other in _net.ConnectedPeerList)
             {
                 if (other != peer)
@@ -2963,7 +2986,7 @@ internal sealed class CoopNetwork : IDisposable
             }
         }
 
-        DoorSync.Apply(key, open, locked);
+        DoorSync.Apply(key, open, locked, openPercent, localRotation);
     }
 
     private void ReceiveElevatorCall(NetPeer peer, NetDataReader reader)

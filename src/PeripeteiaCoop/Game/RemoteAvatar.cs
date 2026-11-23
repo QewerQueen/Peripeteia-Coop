@@ -2552,10 +2552,12 @@ internal sealed class RemoteAvatar
                 }
 
                 _dragStart.Add(body.position);
-                body.isKinematic = false;
-                body.useGravity = true;
+                // Kinematic during carry: prevents other players colliding with the
+                // corpse from being propelled (prop-fly/prop-slide abuse).
                 body.velocity = Vector3.zero;
                 body.angularVelocity = Vector3.zero;
+                body.isKinematic = true;
+                body.useGravity = false;
             }
         }
         catch (Exception exception)
@@ -2604,8 +2606,7 @@ internal sealed class RemoteAvatar
                 }
 
                 Vector3 target = _dragStart[i] + delta;
-                Vector3 velocity = (target - body.position) * DragStiffness;
-                body.velocity = Vector3.ClampMagnitude(velocity, DragMaxSpeed);
+                body.MovePosition(target);
                 body.angularVelocity = Vector3.zero;
             }
         }
@@ -2637,6 +2638,29 @@ internal sealed class RemoteAvatar
         _corpseDragging = false;
         _ragdollAge = 0.0f;
         _dragStart.Clear();
+
+        try
+        {
+            foreach (Rigidbody body in _ragdollBodies)
+            {
+                if (body == null)
+                {
+                    continue;
+                }
+
+                body.isKinematic = false;
+                body.useGravity = true;
+                body.velocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+        }
+        catch (Exception exception)
+        {
+            CoopPlugin.LogSource.LogWarning(
+                $"[death] could not release the corpse of remote {Id}: " +
+                $"{exception.GetType().Name}: {exception.Message}"
+            );
+        }
 
         CoopPlugin.LogSource.LogInfo($"[death] put down the corpse of remote {Id}.");
         SendCorpsePose();
@@ -3139,6 +3163,29 @@ internal sealed class RemoteAvatar
         return capsule;
     }
 
+    private static void SetLayerRecursively(GameObject root, int layer)
+    {
+        if (root == null)
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (Transform transform in root.GetComponentsInChildren<Transform>(true))
+            {
+                if (transform != null)
+                {
+                    transform.gameObject.layer = layer;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Best-effort visibility fix.
+        }
+    }
+
     private GameObject ClonePlayerModel(Transform source)
     {
         GameObject clone = UnityEngine.Object.Instantiate(source.gameObject, source.position, source.rotation);
@@ -3305,6 +3352,10 @@ internal sealed class RemoteAvatar
                 renderer.enabled = false;
             }
         }
+
+        // Remote third-person body must be visible to the local camera. The
+        // source player often has parts on first-person-only/culling layers.
+        SetLayerRecursively(clone, 0);
 
         clone.SetActive(true);
 
