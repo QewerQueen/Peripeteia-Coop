@@ -1,0 +1,29 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: Describe the problem or inconvenience you want to improve
+      placeholder: Right now when ... I have to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How should this work?
+      placeholder: Add a setting / button / sync behavior ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / context
+      description: Other options, links, examples from other mods/games
+    validations:
+      required: false

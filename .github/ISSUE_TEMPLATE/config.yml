@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: README / Installation
+    url: https://github.com/QewerQueen/Peripeteia-Coop#readme
+    about: Installation, launch, and configuration guide
+  - name: Releases
+    url: https://github.com/QewerQueen/Peripeteia-Coop/releases
+    about: Download the latest mod release

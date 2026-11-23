@@ -1,0 +1,121 @@
+name: Bug / Sync Issue
+description: Report a bug, desync, crash, or incorrect co-op behavior
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before creating an issue, make sure **both host and client are using the same mod version**.
+        Sync issues almost always require BepInEx logs from both sides.
+
+  - type: input
+    id: mod_version
+    attributes:
+      label: Mod version
+      description: PeripeteiaCoop version, e.g. 0.7.34
+      placeholder: "0.7.34"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: game_build
+    attributes:
+      label: Game build
+      options:
+        - Full game
+        - Demo
+        - Both (please explain below)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: role
+    attributes:
+      label: Where it happens
+      options:
+        - Host
+        - Client
+        - Both
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: game_version
+    attributes:
+      label: Game version / build
+      description: If you know the exact Peripeteia version/build, include it
+      placeholder: "Metanoia / build ..."
+    validations:
+      required: false
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: Briefly describe the problem
+      placeholder: After loading a save, the client cannot see the host model...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What should someone do to get the same problem?
+      placeholder: |
+        1. Host starts save ...
+        2. Client connects ...
+        3. Host/client does ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: The door/item/NPC should be synchronized for both players.
+    validations:
+      required: false
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: The door is open on host but closed on client.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Attach `BepInEx/LogOutput.log` (or `LogOutput.*.log`) from both host and client.
+        You can paste a short relevant excerpt, but full files are preferred.
+      placeholder: |
+        Host: [attach file or excerpt]
+        Client: [attach file or excerpt]
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots / video / save / extra info
+      description: Scene, object name, map location, other mods, RadminVPN/Steam/LAN, etc.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: Host and client are using the same PeripeteiaCoop version
+          required: false
+        - label: I tested without other mods, or I listed the other mods above
+          required: false
+        - label: I attached host and/or client logs
+          required: false
