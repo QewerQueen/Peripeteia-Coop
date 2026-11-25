@@ -116,7 +116,10 @@ internal static class StorySync
         }
 
         EnsureScene();
-        CoopPlugin.Network?.SendStorySnapshot(peer, string.Join("\n", Consumed));
+
+        var snapshot = new List<string>(Consumed);
+        snapshot.AddRange(FanSync.SnapshotKeys());
+        CoopPlugin.Network?.SendStorySnapshot(peer, string.Join("\n", snapshot));
     }
 
     // ------------------------------------------------------------------
@@ -1176,8 +1179,18 @@ internal static class StorySync
             string[] keys = (text ?? string.Empty).Split('\n');
             foreach (string snapshotKey in keys)
             {
-                if (string.IsNullOrEmpty(snapshotKey) ||
-                    !snapshotKey.StartsWith(prefix, StringComparison.Ordinal) ||
+                if (string.IsNullOrEmpty(snapshotKey))
+                {
+                    continue;
+                }
+
+                if (snapshotKey.StartsWith(FanSync.SnapshotPrefix, StringComparison.Ordinal))
+                {
+                    FanSync.RestoreFromSnapshot(snapshotKey.Substring(FanSync.SnapshotPrefix.Length));
+                    continue;
+                }
+
+                if (!snapshotKey.StartsWith(prefix, StringComparison.Ordinal) ||
                     Consumed.Contains(snapshotKey))
                 {
                     continue;
@@ -1190,6 +1203,12 @@ internal static class StorySync
             CoopPlugin.LogSource.LogInfo(
                 $"[story] rejoin snapshot restored {added} consumed event(s) in '{_scene}'."
             );
+            return;
+        }
+
+        if (kind == (byte)StoryKind.FanShutdown)
+        {
+            FanSync.Apply(key);
             return;
         }
 
@@ -1808,7 +1827,7 @@ internal static class StorySync
         }
     }
 
-    private static GameObject? FindObject(string key)
+    internal static GameObject? FindObject(string key)
     {
         if (ObjectsByKey.TryGetValue(key, out GameObject? cached) && cached != null)
         {
@@ -1960,6 +1979,7 @@ internal enum StoryKind : byte
     QuestEvent = 6,
     DialogueRelease = 7,
     Snapshot = 8,
+    FanShutdown = 9,
 }
 
 [HarmonyPatch(typeof(NPCConversation), "StartConversation")]

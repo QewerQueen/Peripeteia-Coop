@@ -714,6 +714,7 @@ public sealed class CoopPlugin : BasePlugin
         TryPatch(typeof(StoryQuestTriggerEventPatch));
         TryPatch(typeof(StoryQuestBlockEventsPatch));
         TryPatch(typeof(StoryQuestUnblockEventsPatch));
+        TryPatch(typeof(FanShutdownPatch));
         TryPatch(typeof(DisableTimeControllerPausePatch));
         TryPatch(typeof(DisableFocusPausePatch));
         TryPatch(typeof(MainMenuOpenProbePatch));

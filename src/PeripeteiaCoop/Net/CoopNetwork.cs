@@ -293,6 +293,7 @@ internal sealed class CoopNetwork : IDisposable
         PlayerStateSync.FlushPending();
         TeammateStateSync.Tick(localPlayer);
         StorySync.Tick(localPlayer);
+        FanSync.Tick();
 
         string localScene = localPlayer != null ? localPlayer.gameObject.scene.name : string.Empty;
         bool localReady = IsLocalPlayerReady(localPlayer);
